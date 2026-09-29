@@ -1,0 +1,24 @@
+{
+  "name": "sift",
+  "version": "0.1.0",
+  "description": "Lightweight client-side engine for progressive visualization of big data",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "keywords": [
+    "progressive-visualization",
+    "webassembly",
+    "big-data",
+    "wasm",
+    "steering"
+  ],
+  "author": "superboss555",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.0.10"
+  }
+}
