@@ -3,12 +3,104 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SIFT — Progressive Visualization Engine</title>
+    <title>SIFT — Прогрессивная визуализация больших данных</title>
 </head>
 <body>
-    <h1>SIFT</h1>
-    <p>Lightweight client-side engine for progressive visualization of big data</p>
-    <div id="app"></div>
+    <header class="app-header">
+        <h1>SIFT</h1>
+        <div class="header-divider"></div>
+        <p class="tagline">Прогрессивная визуализация больших данных</p>
+    </header>
+
+    <!-- Единая зона загрузки -->
+    <div id="drop-zone">
+        <div class="drop-icon">📂</div>
+        <p class="drop-title">Перетащите файл сюда</p>
+        <p class="drop-sub">или <span class="drop-action">нажмите для выбора</span></p>
+        <p class="drop-sub">или вставьте через <kbd>Ctrl</kbd> + <kbd>V</kbd></p>
+        <p class="drop-formats">Поддерживаются: .csv, .xlsx, .xls</p>
+        <input type="file" id="file-input" accept=".csv,.xlsx,.xls" style="display: none;">
+    </div>
+
+    <!-- Полоса текущего файла -->
+    <div id="current-file-bar" class="current-file-bar">
+        <span class="current-file-label">Загружен файл:</span>
+        <span id="current-file-name" class="current-file-name">—</span>
+        <button id="new-file-btn" class="new-file-btn">Загрузить другой</button>
+    </div>
+
+    <!-- Панель управления -->
+    <div id="controls-bar" class="controls-bar">
+        <label class="control">
+            <input type="checkbox" id="has-headers" checked>
+            <span>Первая строка — заголовки</span>
+        </label>
+
+        <div class="control-divider"></div>
+
+        <label id="delimiter-label" class="control">
+            <span>Разделитель:</span>
+            <select id="delimiter-select" class="delimiter-select">
+                <option value="auto">Авто</option>
+                <option value=",">Запятая ( , )</option>
+                <option value=";">Точка с запятой ( ; )</option>
+                <option value="&#9;">Табуляция ( \t )</option>
+                <option value="|">Вертикальная черта ( | )</option>
+            </select>
+            <span id="delimiter-detected" class="delimiter-chip"></span>
+        </label>
+    </div>
+
+    <!-- Строка статусов (заполняется JS) -->
+    <div id="status-line" class="status-line"></div>
+
+    <div id="error"></div>
+    <div id="result"></div>
+
     <script type="module" src="/src/main.ts"></script>
+
+    <!-- Модальное окно выбора режима первой строки -->
+    <div id="header-mode-modal" class="modal-overlay">
+        <div class="modal">
+            <h3 class="modal-title">Что делать с первой строкой?</h3>
+            <p class="modal-text">
+                Вы отключили использование первой строки как заголовков. Выберите, как поступить с ней:
+            </p>
+            <div class="modal-options">
+                <button id="modal-drop" class="modal-option">
+                    <span class="modal-option-title">Удалить строку</span>
+                    <span class="modal-option-desc">Первая строка будет отброшена. Данные начнутся со второй строки.</span>
+                </button>
+                <button id="modal-keep" class="modal-option warn">
+                    <span class="modal-option-title">Оставить как данные</span>
+                    <span class="modal-option-desc">Первая строка станет строкой данных. Может привести к ошибкам типизации.</span>
+                </button>
+            </div>
+            <button id="modal-cancel" class="modal-cancel">Отмена</button>
+        </div>
+    </div>
+
+    <!-- Модальное окно: превратить первую строку в заголовки -->
+    <div id="promote-headers-modal" class="modal-overlay">
+        <div class="modal">
+            <h3 class="modal-title">Сделать первую строку заголовками?</h3>
+            <p class="modal-text">
+                Первая строка будет использована как названия колонок.
+                Остальные строки сдвинутся вверх — количество строк данных уменьшится на одну.
+            </p>
+            <div class="modal-warning">
+                Если первая строка содержит данные, её значения будут потеряны для анализа,
+                а типы колонок могут определиться некорректно.
+            </div>
+            <div class="modal-options">
+                <button id="promote-confirm" class="modal-option">
+                    <span class="modal-option-title">Да, сделать заголовками</span>
+                    <span class="modal-option-desc">Первая строка станет названиями колонок</span>
+                </button>
+            </div>
+            <button id="promote-cancel" class="modal-cancel">Отмена</button>
+        </div>
+    </div>
+
 </body>
 </html>

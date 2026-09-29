@@ -1,9 +1,25 @@
+# === Зависимости ===
 node_modules/
+
+# === Сборка ===
 dist/
-*.wasm
+
+# === Генерация Emscripten ===
+src/*.wasm
+src/*.js
+!src/main.ts
+!src/loader.ts
+!src/memory.ts
+!src/storage.ts
 *.js.map
+
+# === ОС ===
 .DS_Store
+Thumbs.db
+
+# === VS Code ===
 .vscode/*
+!.vscode/c_cpp_properties.json
+!.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
-!.vscode/settings.json

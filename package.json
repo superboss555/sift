@@ -18,7 +18,12 @@
   "author": "superboss555",
   "license": "MIT",
   "devDependencies": {
+    "@types/papaparse": "^5.5.2",
     "typescript": "^7.0.2",
     "vite": "^8.0.10"
+  },
+  "dependencies": {
+    "papaparse": "^5.7.0",
+    "xlsx": "^0.18.5"
   }
 }

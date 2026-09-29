@@ -1,0 +1,21 @@
+{
+    "configurations": [
+        {
+            "name": "Win32",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "D:/emsdk/upstream/emscripten/system/include",
+                "D:/emsdk/upstream/emscripten/system/include/compat",
+                "D:/emsdk/upstream/emscripten/system/lib/libcxx/include",
+                "D:/emsdk/upstream/emscripten/system/lib/libcxxabi/include",
+                "D:/emsdk/upstream/emscripten/system/lib/pthread"
+            ],
+            "defines": ["__EMSCRIPTEN__"],
+            "compilerPath": "D:/emsdk/upstream/emscripten/em++.exe",
+            "cStandard": "c17",
+            "cppStandard": "c++20",
+            "intelliSenseMode": "windows-clang-x64"
+        }
+    ],
+    "version": 4
+}

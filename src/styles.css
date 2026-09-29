@@ -1,0 +1,637 @@
+/* === Базовые стили === */
+html {
+    scrollbar-gutter: stable;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    max-width: 1200px;
+    margin: 40px auto;
+    padding: 0 20px;
+    background: #fafafa;
+    color: #333;
+    font-size: 16px;    /* ← было по умолчанию 16px, но теперь явно и влияет на всё */
+    line-height: 1.5;
+}
+
+body.modal-open {
+    overflow: hidden;
+    padding-right: var(--scrollbar-width, 0px);
+}
+
+.app-header {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 4px 0 22px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid #e8ecf1;
+}
+
+.app-header h1 {
+    font-size: 36px;
+    font-weight: 800;
+    letter-spacing: -1px;
+    color: #0f1720;
+    margin: 0;
+    line-height: 1;
+}
+
+.header-divider {
+    width: 2px;
+    height: 30px;
+    background: #4a9eff;
+    border-radius: 2px;
+}
+
+.tagline {
+    font-size: 15px;
+    color: #64748b;
+    margin: 0;
+    font-weight: 400;
+}
+
+@media (max-width: 600px) {
+    .app-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+    .header-divider { display: none; }
+}
+
+h1 {
+    font-size: 42px;        /* ← было 32px по умолчанию */
+    margin-bottom: 6px;
+    letter-spacing: -0.5px;
+}
+
+.subtitle {
+    font-size: 17px;        /* ← было 14px */
+    color: #666;
+    margin-top: 0;
+}
+
+/* === Drop-zone === */
+#drop-zone {
+    border: 2px dashed #bbb;
+    border-radius: 12px;
+    padding: 60px 20px;
+    text-align: center;
+    background: white;
+    transition: all 0.2s;
+    margin: 24px 0;
+    cursor: pointer;
+}
+#drop-zone:hover {
+    border-color: #4a9eff;
+    background: #f0f7ff;
+}
+#drop-zone.dragover {
+    border-color: #4a9eff;
+    background: #e6f2ff;
+    transform: scale(1.01);
+}
+#drop-zone.reject {
+    border-color: #e74c3c;
+    background: #ffe6e6;
+    animation: shake 0.5s ease-in-out;
+}
+
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-8px); }
+    40% { transform: translateX(8px); }
+    60% { transform: translateX(-6px); }
+    80% { transform: translateX(6px); }
+}
+
+.drop-icon {
+    font-size: 52px;        /* ← было 40px */
+    margin-bottom: 14px;
+    opacity: 0.5;
+}
+
+.drop-title {
+    font-size: 22px;        /* ← было 18px */
+    font-weight: 600;
+    color: #333;
+    margin: 10px 0;
+}
+
+.drop-sub {
+    font-size: 16px;        /* ← было 14px */
+    color: #666;
+    margin: 8px 0;
+}
+
+.drop-formats {
+    font-size: 14px;        /* ← было 12px */
+    color: #999;
+    margin-top: 18px;
+}
+
+.drop-action {
+    color: #4a9eff;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 3px;
+}
+
+
+#drop-zone kbd {
+    display: inline-block;
+    padding: 3px 8px;
+    background: #f5f5f5;
+    border: 1px solid #ddd;
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 14px;        /* ← было 12px */
+    color: #333;
+}
+
+/* === Полоса текущего файла === */
+.current-file-bar {
+    display: none;
+    align-items: center;
+    gap: 12px;
+    background: linear-gradient(135deg, #f8fbff 0%, #eaf3ff 100%);
+    border-radius: 12px;
+    padding: 14px 20px;
+    margin: 16px 0 12px;
+    border: 1.5px solid #b8d4f5;
+    box-shadow: 0 1px 2px rgba(74, 158, 255, 0.08);
+}
+
+.current-file-label {
+    font-size: 12px;        /* ← было 11px */
+    font-weight: 700;
+    color: #4a5568;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+
+.current-file-name {
+    font-size: 17px;        /* ← было 15px */
+    font-weight: 600;
+    color: #1e4976;
+    flex: 1;
+}
+
+.new-file-btn {
+    padding: 9px 18px;
+    border-radius: 8px;
+    border: 1.5px solid #4a9eff;
+    background: white;
+    color: #4a9eff;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-size: 15px;        /* ← было 13px */
+}
+.new-file-btn:hover {
+    background: #4a9eff;
+    color: white;
+    box-shadow: 0 2px 8px rgba(74, 158, 255, 0.3);
+}
+
+/* === Панель управления === */
+.controls-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: white;
+    border-radius: 12px;
+    padding: 14px 20px;
+    margin: 16px 0 12px;
+    border: 1.5px solid #c8cfd8;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    flex-wrap: wrap;
+}
+
+.control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 16px;        /* ← было 14px */
+    color: #444;
+    cursor: pointer;
+    user-select: none;
+}
+
+.control input[type='checkbox'] {
+    width: 18px;            /* ← было 16px */
+    height: 18px;
+    accent-color: #4a9eff;
+    cursor: pointer;
+}
+
+.control-divider {
+    width: 1px;
+    height: 24px;
+    background: #e5e5e5;
+    margin: 0 4px;
+}
+
+.delimiter-select {
+    padding: 7px 12px;
+    border: 1px solid #c8cfd8;
+    border-radius: 6px;
+    background: white;
+    font-family: inherit;
+    font-size: 15px;        /* ← было 13px */
+    color: #333;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.delimiter-select:hover { border-color: #4a9eff; }
+.delimiter-select:focus {
+    outline: none;
+    border-color: #4a9eff;
+    box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.15);
+}
+
+.delimiter-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 10px;
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 14px;
+    color: #0a4b6b;
+    background: #e6f2ff;
+    border-radius: 12px;
+    font-weight: 600;
+}
+.delimiter-chip:empty { display: none; }
+.delimiter-chip::before {
+    content: 'определён: ';
+    font-weight: 400;
+    opacity: 0.7;
+    margin-right: 2px;
+}
+
+/* === Строка статусов === */
+.status-line {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+.status-line:empty { display: none; }
+
+.status-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 13px;
+    font-size: 15px;
+    border-radius: 8px;
+    font-weight: 500;
+    line-height: 1.3;
+    border: 1px solid transparent;
+}
+
+.status-chip .chip-label {
+    color: rgba(0, 0, 0, 0.55);
+    font-weight: 400;
+}
+
+.status-chip.good {
+    background: #e7f7ec;
+    color: #0a6b2c;
+    border-color: #bde5c8;
+}
+.status-chip.warn {
+    background: #fdf3e1;
+    color: #92400e;
+    border-color: #f0d9a7;
+}
+.status-chip.info {
+    background: #ecf3fc;
+    color: #1e4976;
+    border-color: #cfe1f5;
+}
+
+/* === Карточки === */
+.card {
+    background: white;
+    border-radius: 12px;
+    padding: 24px 28px 26px;
+    margin-bottom: 14px;
+    box-shadow:
+        0 1px 2px rgba(0, 0, 0, 0.04),
+        0 0 0 1px rgba(0, 0, 0, 0.04);
+    border: 1.5px solid #c8cfd8;
+    position: relative;
+    transition: border-color 0.15s;
+}
+.card:hover {
+    border-color: #a8b5c4;
+}
+
+.card::before {
+    content: '';
+    position: absolute;
+    left: -1.5px;
+    top: 24px;
+    bottom: 24px;
+    width: 4px;
+    border-radius: 0 4px 4px 0;
+    background: #4a9eff;
+}
+
+.card-title {
+    font-size: 24px;        /* ← было 17px */
+    font-weight: 700;
+    letter-spacing: -0.2px;
+    color: #0f1720;
+    margin: 0 0 22px 0;
+    padding-bottom: 14px;
+    border-bottom: 1px solid #e8ecf1;
+}
+
+/* === Блок «Файл» === */
+.file-row {
+    display: flex;
+    align-items: baseline;
+    gap: 24px;
+    flex-wrap: wrap;
+}
+.file-row .metric {
+    display: flex;
+    flex-direction: column;
+}
+.file-row .value {
+    font-size: 30px;        /* ← было 22px */
+    font-weight: 700;
+    color: #4a9eff;
+    line-height: 1.1;
+}
+
+.file-row .label {
+    font-size: 13px;        /* ← было 11px */
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 4px;
+}
+
+/* === Блок «Память» === */
+.memory-row {
+    display: flex;
+    gap: 32px;
+    flex-wrap: wrap;
+}
+.memory-row .metric {
+    display: flex;
+    flex-direction: column;
+}
+.memory-row .value {
+    font-size: 26px;        /* ← было 20px */
+    font-weight: 700;
+    color: #2c8a3e;
+    line-height: 1.1;
+}
+
+.memory-row .label {
+    font-size: 13px;        /* ← было 11px */
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 4px;
+}
+.memory-row .metric.warn .value { color: #d97706; }
+.memory-row .metric.info .value { color: #4a9eff; }
+
+/* === Блок «Типы колонок» === */
+.columns {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.column-badge {
+    padding: 8px 15px;
+    border-radius: 7px;
+    font-size: 15px;        /* ← было 13px */
+    font-weight: 500;
+    border: 1px solid transparent;
+    transition: transform 0.1s;
+}
+.column-badge:hover { transform: translateY(-1px); }
+
+.column-badge.numeric {
+    background: #e7f7ec;
+    color: #0a6b2c;
+    border-color: #c8ebd3;
+}
+.column-badge.string {
+    background: #ecf3fc;
+    color: #1e4976;
+    border-color: #cfe1f5;
+}
+.column-badge.mixed {
+    background: #fdf3e1;
+    color: #92400e;
+    border-color: #f5dfb8;
+}
+.column-badge.empty {
+    background: #f0f0f0;
+    color: #777;
+    border-color: #e0e0e0;
+}
+
+/* === Таблица === */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 15px;        /* ← было 13px */
+}
+
+th, td {
+    padding: 10px 14px;     /* ← было 8px 12px */
+    text-align: left;
+    border-bottom: 1px solid #eee;
+    white-space: nowrap;
+}
+
+th {
+    background: #f5f5f5;
+    font-weight: 600;
+    font-size: 15px;
+}
+tr:hover { background: #f9f9f9; }
+.table-wrapper {
+    overflow-x: auto;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+/* === Ошибки === */
+#error {
+    background: #ffe6e6;
+    color: #b00020;
+    padding: 14px 18px;
+    border-radius: 8px;
+    margin: 16px 0;
+    display: none;
+    border-left: 4px solid #e74c3c;
+    font-size: 15px;        /* ← было 14px */
+    animation: slideDown 0.2s ease-out;
+}
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* === Состояние загрузки === */
+#result {
+    position: relative;
+    transition: opacity 0.15s;
+}
+#result.loading {
+    opacity: 0.4;
+    pointer-events: none;
+}
+#result.loading::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(250, 250, 250, 0.3);
+    border-radius: 12px;
+}
+#result > .card {
+    animation: cardFadeIn 0.2s ease-out;
+}
+@keyframes cardFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* === Модальные окна === */
+.modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+    animation: fadeIn 0.15s ease-out;
+}
+.modal-overlay.open { display: flex; }
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.modal {
+    background: white;
+    border-radius: 12px;
+    padding: 28px 32px;
+    max-width: 520px;
+    width: 90%;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+    animation: modalIn 0.2s ease-out;
+}
+
+@keyframes modalIn {
+    from { opacity: 0; transform: scale(0.96); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+.modal-title {
+    margin: 0 0 10px 0;
+    font-size: 22px;        /* ← было 18px */
+    color: #1a202c;
+}
+
+.modal-text {
+    margin: 0 0 22px 0;
+    font-size: 16px;        /* ← было 14px */
+    color: #555;
+    line-height: 1.55;
+}
+
+.modal-options {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.modal-option {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 14px 16px;
+    background: white;
+    border: 2px solid #e5e5e5;
+    border-radius: 10px;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.15s;
+    font-family: inherit;
+}
+.modal-option:hover {
+    border-color: #4a9eff;
+    background: #f0f7ff;
+}
+.modal-option.warn:hover {
+    border-color: #d97706;
+    background: #fef3e0;
+}
+
+.modal-option-title {
+    font-size: 17px;        /* ← было 15px */
+    font-weight: 600;
+    color: #333;
+}
+.modal-option.warn .modal-option-title { color: #b45309; }
+
+.modal-option-desc {
+    font-size: 14px;        /* ← было 13px */
+    color: #777;
+    line-height: 1.45;
+}
+
+.modal-cancel {
+    display: block;
+    width: 100%;
+    padding: 12px;
+    background: none;
+    border: none;
+    color: #888;
+    font-size: 16px;        /* ← было 14px */
+    cursor: pointer;
+    border-radius: 8px;
+    transition: background 0.15s;
+    font-family: inherit;
+}
+.modal-cancel:hover {
+    background: #f5f5f5;
+    color: #333;
+}
+
+.modal-warning {
+    background: #fef3e0;
+    border-left: 4px solid #d97706;
+    color: #92400e;
+    padding: 14px 16px;
+    border-radius: 8px;
+    font-size: 15px;        /* ← было 13px */
+    line-height: 1.55;
+    margin-bottom: 18px;
+}
