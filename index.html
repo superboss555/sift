@@ -1,106 +1,364 @@
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!doctype html>
+<html lang="ru" style="height: 100%">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SIFT — Прогрессивная визуализация больших данных</title>
-</head>
-<body>
-    <header class="app-header">
+  </head>
+  <body style="height: 100%; margin: 0">
+    <!-- ==================== СТРАНИЦА 1: ЗАГРУЗКА ==================== -->
+    <div id="page-upload" class="page active">
+      <header class="app-header">
         <h1>SIFT</h1>
         <div class="header-divider"></div>
         <p class="tagline">Прогрессивная визуализация больших данных</p>
-    </header>
+      </header>
 
-    <!-- Единая зона загрузки -->
-    <div id="drop-zone">
+      <!-- Единая зона загрузки -->
+      <div id="drop-zone">
         <div class="drop-icon">📂</div>
         <p class="drop-title">Перетащите файл сюда</p>
-        <p class="drop-sub">или <span class="drop-action">нажмите для выбора</span></p>
-        <p class="drop-sub">или вставьте через <kbd>Ctrl</kbd> + <kbd>V</kbd></p>
+        <p class="drop-sub">
+          или <span class="drop-action">нажмите для выбора</span>
+        </p>
+        <p class="drop-sub">
+          или вставьте через <kbd>Ctrl</kbd> + <kbd>V</kbd>
+        </p>
         <p class="drop-formats">Поддерживаются: .csv, .xlsx, .xls</p>
-        <input type="file" id="file-input" accept=".csv,.xlsx,.xls" style="display: none;">
-    </div>
+        <input
+          type="file"
+          id="file-input"
+          accept=".csv,.xlsx,.xls"
+          style="display: none"
+        />
+      </div>
 
-    <!-- Полоса текущего файла -->
-    <div id="current-file-bar" class="current-file-bar">
+      <!-- Кнопка «Открыть датасет из проекта» -->
+      <button id="load-from-project-btn" class="load-from-project-btn">
+        📁 Открыть датасет из проекта
+      </button>
+
+      <!-- Полоса текущего файла -->
+      <div id="current-file-bar" class="current-file-bar">
         <span class="current-file-label">Загружен файл:</span>
         <span id="current-file-name" class="current-file-name">—</span>
         <button id="new-file-btn" class="new-file-btn">Загрузить другой</button>
-    </div>
+      </div>
 
-    <!-- Панель управления -->
-    <div id="controls-bar" class="controls-bar">
+      <!-- Панель управления -->
+      <div id="controls-bar" class="controls-bar">
         <label class="control">
-            <input type="checkbox" id="has-headers" checked>
-            <span>Первая строка — заголовки</span>
+          <input type="checkbox" id="has-headers" checked />
+          <span>Первая строка — заголовки</span>
         </label>
 
         <div class="control-divider"></div>
 
         <label id="delimiter-label" class="control">
-            <span>Разделитель:</span>
-            <select id="delimiter-select" class="delimiter-select">
-                <option value="auto">Авто</option>
-                <option value=",">Запятая ( , )</option>
-                <option value=";">Точка с запятой ( ; )</option>
-                <option value="&#9;">Табуляция ( \t )</option>
-                <option value="|">Вертикальная черта ( | )</option>
-            </select>
-            <span id="delimiter-detected" class="delimiter-chip"></span>
+          <span>Разделитель:</span>
+          <select id="delimiter-select" class="delimiter-select">
+            <option value="auto">Авто</option>
+            <option value=",">Запятая ( , )</option>
+            <option value=";">Точка с запятой ( ; )</option>
+            <option value="&#9;">Табуляция ( \t )</option>
+            <option value="|">Вертикальная черта ( | )</option>
+          </select>
+          <span id="delimiter-detected" class="delimiter-chip"></span>
         </label>
+      </div>
+
+      <div id="status-line" class="status-line"></div>
+      <div id="error"></div>
+      <div id="result"></div>
+
+      <!-- FAB-кнопка "Дальше" -->
+      <div id="next-btn-wrapper" class="next-btn-wrapper">
+        <button id="next-btn" class="next-btn" title="Перейти к визуализации">
+          <span>Дальше</span>
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+            <polyline points="12 5 19 12 12 19"></polyline>
+          </svg>
+        </button>
+      </div>
     </div>
 
-    <!-- Строка статусов (заполняется JS) -->
-    <div id="status-line" class="status-line"></div>
+    <!-- ==================== СТРАНИЦА 2: ВИЗУАЛИЗАЦИЯ ==================== -->
+    <div id="page-visualize" class="page">
+      <!-- Верхняя панель управления -->
+      <header class="viz-toolbar">
+        <button id="back-btn" class="toolbar-btn" title="Вернуться к загрузке">
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <line x1="19" y1="12" x2="5" y2="12"></line>
+            <polyline points="12 19 5 12 12 5"></polyline>
+          </svg>
+          Назад
+        </button>
 
-    <div id="error"></div>
-    <div id="result"></div>
+        <div class="toolbar-divider"></div>
+
+        <span class="toolbar-file-name" id="viz-file-name">—</span>
+
+        <div
+          class="toolbar-progress"
+          id="toolbar-progress"
+          style="display: none"
+        >
+          <span class="toolbar-progress-icon">⏱</span>
+          <span class="toolbar-progress-time" id="toolbar-progress-time"
+            >0 мс</span
+          >
+          <div class="toolbar-progress-bar-wrap">
+            <div class="toolbar-progress-bar" id="toolbar-progress-bar"></div>
+          </div>
+          <span class="toolbar-progress-pct" id="toolbar-progress-pct">0%</span>
+        </div>
+
+        <div class="toolbar-spacer"></div>
+
+        <div class="toolbar-group">
+          <span class="toolbar-label">Обработка:</span>
+          <button class="toolbar-btn icon-only" id="steer-pause" title="Пауза">
+            ⏸
+          </button>
+          <button
+            class="toolbar-btn icon-only"
+            id="steer-slower"
+            title="Замедлить"
+          >
+            ◀
+          </button>
+          <button
+            class="toolbar-btn icon-only"
+            id="steer-faster"
+            title="Ускорить"
+          >
+            ▶
+          </button>
+        </div>
+
+        <div class="toolbar-divider"></div>
+
+        <button
+          id="toggle-panels-btn"
+          class="toolbar-btn"
+          title="Скрыть/показать панели"
+        >
+          Скрыть панели
+        </button>
+      </header>
+
+      <!-- Основной рабочий layout -->
+      <div class="viz-layout" id="viz-layout">
+        <!-- Левая панель: список колонок -->
+        <aside class="viz-panel viz-columns-panel" id="columns-panel">
+          <div class="panel-header">
+            <h4 class="panel-title">Колонки</h4>
+            <button
+              class="panel-collapse-btn"
+              data-panel="columns-panel"
+              title="Свернуть"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <polyline points="15 18 9 12 15 6"></polyline>
+              </svg>
+            </button>
+          </div>
+          <ul id="columns-list" class="columns-list"></ul>
+        </aside>
+
+        <!-- Средняя панель: доступные визуализации -->
+        <aside class="viz-panel viz-options-panel" id="options-panel">
+          <div class="panel-header">
+            <h4 class="panel-title">Визуализация</h4>
+            <button
+              class="panel-collapse-btn"
+              data-panel="options-panel"
+              title="Свернуть"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <polyline points="15 18 9 12 15 6"></polyline>
+              </svg>
+            </button>
+          </div>
+          <ul id="viz-options-list" class="viz-options-list"></ul>
+        </aside>
+
+        <!-- Рабочее поле -->
+        <main class="viz-canvas" id="viz-canvas">
+          <div id="viz-empty-state" class="viz-empty-state">
+            <p>Рабочее поле пустое</p>
+            <p class="viz-empty-state-sub">
+              Выберите визуализацию в панели слева
+            </p>
+          </div>
+        </main>
+
+        <!-- Правая панель: настройки активной карточки -->
+        <aside class="viz-panel viz-settings-panel" id="settings-panel">
+          <div class="panel-header">
+            <h4 class="panel-title" id="settings-panel-title">Настройки</h4>
+            <button
+              class="panel-collapse-btn"
+              id="settings-close-btn"
+              title="Закрыть"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          </div>
+          <div class="settings-content" id="settings-content"></div>
+        </aside>
+      </div>
+    </div>
 
     <script type="module" src="/src/main.ts"></script>
 
     <!-- Модальное окно выбора режима первой строки -->
     <div id="header-mode-modal" class="modal-overlay">
-        <div class="modal">
-            <h3 class="modal-title">Что делать с первой строкой?</h3>
-            <p class="modal-text">
-                Вы отключили использование первой строки как заголовков. Выберите, как поступить с ней:
-            </p>
-            <div class="modal-options">
-                <button id="modal-drop" class="modal-option">
-                    <span class="modal-option-title">Удалить строку</span>
-                    <span class="modal-option-desc">Первая строка будет отброшена. Данные начнутся со второй строки.</span>
-                </button>
-                <button id="modal-keep" class="modal-option warn">
-                    <span class="modal-option-title">Оставить как данные</span>
-                    <span class="modal-option-desc">Первая строка станет строкой данных. Может привести к ошибкам типизации.</span>
-                </button>
-            </div>
-            <button id="modal-cancel" class="modal-cancel">Отмена</button>
+      <div class="modal">
+        <h3 class="modal-title">Что делать с первой строкой?</h3>
+        <p class="modal-text">
+          Вы отключили использование первой строки как заголовков. Выберите, как
+          поступить с ней:
+        </p>
+        <div class="modal-options">
+          <button id="modal-drop" class="modal-option">
+            <span class="modal-option-title">Удалить строку</span>
+            <span class="modal-option-desc"
+              >Первая строка будет отброшена. Данные начнутся со второй
+              строки.</span
+            >
+          </button>
+          <button id="modal-keep" class="modal-option warn">
+            <span class="modal-option-title">Оставить как данные</span>
+            <span class="modal-option-desc"
+              >Первая строка станет строкой данных. Может привести к ошибкам
+              типизации.</span
+            >
+          </button>
         </div>
+        <button id="modal-cancel" class="modal-cancel">Отмена</button>
+      </div>
     </div>
 
     <!-- Модальное окно: превратить первую строку в заголовки -->
     <div id="promote-headers-modal" class="modal-overlay">
-        <div class="modal">
-            <h3 class="modal-title">Сделать первую строку заголовками?</h3>
-            <p class="modal-text">
-                Первая строка будет использована как названия колонок.
-                Остальные строки сдвинутся вверх — количество строк данных уменьшится на одну.
-            </p>
-            <div class="modal-warning">
-                Если первая строка содержит данные, её значения будут потеряны для анализа,
-                а типы колонок могут определиться некорректно.
-            </div>
-            <div class="modal-options">
-                <button id="promote-confirm" class="modal-option">
-                    <span class="modal-option-title">Да, сделать заголовками</span>
-                    <span class="modal-option-desc">Первая строка станет названиями колонок</span>
-                </button>
-            </div>
-            <button id="promote-cancel" class="modal-cancel">Отмена</button>
+      <div class="modal">
+        <h3 class="modal-title">Сделать первую строку заголовками?</h3>
+        <p class="modal-text">
+          Первая строка будет использована как названия колонок. Остальные
+          строки сдвинутся вверх — количество строк данных уменьшится на одну.
+        </p>
+        <div class="modal-warning">
+          Если первая строка содержит данные, её значения будут потеряны для
+          анализа, а типы колонок могут определиться некорректно.
         </div>
+        <div class="modal-options">
+          <button id="promote-confirm" class="modal-option">
+            <span class="modal-option-title">Да, сделать заголовками</span>
+            <span class="modal-option-desc"
+              >Первая строка станет названиями колонок</span
+            >
+          </button>
+        </div>
+        <button id="promote-cancel" class="modal-cancel">Отмена</button>
+      </div>
     </div>
 
-</body>
+    <!-- Модальное окно: файловый браузер проекта -->
+    <div id="dataset-modal" class="modal-overlay">
+      <div class="modal dataset-browser-modal">
+        <h3 class="modal-title">Открыть файл из проекта</h3>
+        <p class="modal-text">
+          Поддерживаются <b>.csv</b>, <b>.xlsx</b>, <b>.xls</b>. Можно
+          перемещаться по папкам проекта.
+        </p>
+        <div class="dataset-browser">
+          <div class="dataset-browser-bar">
+            <button
+              id="dataset-browser-up"
+              class="dataset-browser-up"
+              title="На уровень выше"
+            >
+              ←
+            </button>
+            <code id="dataset-browser-path">/</code>
+          </div>
+          <div id="dataset-modal-list" class="dataset-modal-list"></div>
+        </div>
+        <button id="dataset-modal-cancel" class="modal-cancel">Закрыть</button>
+      </div>
+    </div>
+
+    <!-- Модалка: список исключённых строк -->
+    <div id="bad-rows-modal" class="modal-overlay">
+      <div class="modal bad-rows-modal">
+        <h3 class="modal-title">Исключённые строки</h3>
+        <p class="modal-text" id="bad-rows-text">
+          Эти строки не были учтены при построении визуализации.
+        </p>
+        <div class="bad-rows-table-wrap">
+          <table class="bad-rows-table">
+            <thead>
+              <tr>
+                <th>№ строки</th>
+                <th>Значение</th>
+                <th>Причина</th>
+              </tr>
+            </thead>
+            <tbody id="bad-rows-tbody"></tbody>
+          </table>
+        </div>
+        <button id="bad-rows-cancel" class="modal-cancel">Закрыть</button>
+      </div>
+    </div>
+  </body>
 </html>

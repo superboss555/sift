@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SIFT — Генератор тестовых данных</title>
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #fafafa;
+        color: #333;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      .gen-header {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 28px 24px 20px;
+        border-bottom: 1px solid #e8ecf1;
+      }
+      .gen-header h1 {
+        font-size: 24px;
+        font-weight: 800;
+        color: #0f1720;
+        margin: 0 0 4px;
+        letter-spacing: -0.3px;
+      }
+      .gen-tagline {
+        color: #64748b;
+        margin: 0;
+        font-size: 14px;
+      }
+
+      .gen-main {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 24px;
+        display: grid;
+        grid-template-columns: 340px 1fr;
+        gap: 24px;
+        align-items: start;
+      }
+
+      @media (max-width: 900px) {
+        .gen-main { grid-template-columns: 1fr; }
+      }
+
+      .gen-panel, .gen-preview {
+        background: white;
+        border-radius: 12px;
+        border: 1.5px solid #c8cfd8;
+        padding: 20px 22px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+      }
+
+      .gen-panel h2, .gen-preview h2 {
+        font-size: 15px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        color: #64748b;
+        margin: 0 0 16px;
+      }
+
+      .gen-field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-bottom: 14px;
+      }
+      .gen-field label {
+        font-size: 12px;
+        font-weight: 600;
+        color: #475569;
+      }
+      .gen-field input,
+      .gen-field select {
+        padding: 8px 10px;
+        border: 1.5px solid #d8dde3;
+        border-radius: 6px;
+        font-family: inherit;
+        font-size: 13px;
+        color: #333;
+        background: white;
+        transition: all 0.15s;
+      }
+      .gen-field input:focus,
+      .gen-field select:focus {
+        outline: none;
+        border-color: #4a9eff;
+        box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.15);
+      }
+
+      .gen-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 20px;
+        padding-top: 18px;
+        border-top: 1px solid #eef2f6;
+      }
+
+      .gen-btn {
+        padding: 10px 16px;
+        border-radius: 8px;
+        border: 1.5px solid #c8cfd8;
+        background: white;
+        color: #333;
+        font-family: inherit;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+      .gen-btn:hover {
+        border-color: #4a9eff;
+        color: #4a9eff;
+        background: #f0f7ff;
+      }
+      .gen-btn.primary {
+        background: #4a9eff;
+        color: white;
+        border-color: #4a9eff;
+      }
+      .gen-btn.primary:hover {
+        background: #3a8eef;
+        color: white;
+      }
+
+      .gen-checkbox {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: #475569;
+        cursor: pointer;
+        user-select: none;
+        padding: 6px 0;
+      }
+      .gen-checkbox input[type="checkbox"] {
+        width: 16px;
+        height: 16px;
+        accent-color: #4a9eff;
+        cursor: pointer;
+      }
+
+      .gen-stats {
+        margin-top: 18px;
+        padding-top: 16px;
+        border-top: 1px solid #eef2f6;
+        font-size: 12px;
+        color: #64748b;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .gen-stats .row {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .gen-stats .val {
+        color: #0f1720;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .gen-preview-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      .gen-preview-header h2 { margin: 0; }
+      .gen-preview-hint {
+        font-size: 12px;
+        color: #94a3b8;
+      }
+
+      .gen-preview-body {
+        overflow-x: auto;
+        max-height: 600px;
+        overflow-y: auto;
+        border: 1px solid #eef2f6;
+        border-radius: 8px;
+      }
+      .gen-preview-body table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      .gen-preview-body th, .gen-preview-body td {
+        padding: 6px 10px;
+        text-align: left;
+        border-bottom: 1px solid #f0f2f5;
+      }
+      .gen-preview-body th {
+        background: #f5f7fa;
+        font-weight: 700;
+        color: #334155;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        position: sticky;
+        top: 0;
+      }
+      .gen-preview-body tr:hover td {
+        background: #fafbfc;
+      }
+      .gen-preview-body td.empty {
+        color: #cbd5e1;
+        font-style: italic;
+      }
+
+      .gen-error {
+        margin-top: 12px;
+        padding: 10px 12px;
+        background: #ffe6e6;
+        color: #b00020;
+        border-left: 3px solid #e74c3c;
+        border-radius: 6px;
+        font-size: 13px;
+      }
+
+      .gen-saved {
+        margin-top: 12px;
+        padding: 10px 12px;
+        background: #e7f7ec;
+        color: #0a6b2c;
+        border-left: 3px solid #10b981;
+        border-radius: 6px;
+        font-size: 13px;
+      }
+      .gen-saved code {
+        font-family: ui-monospace, monospace;
+        background: rgba(0, 0, 0, 0.05);
+        padding: 1px 5px;
+        border-radius: 3px;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="gen-header">
+      <h1>SIFT · Генератор тестовых данных</h1>
+      <p class="gen-tagline">
+        Синтетический датасет продаж — для проверки гистограмм, линейчатых,
+        круговых и Box plot
+      </p>
+    </header>
+
+    <main class="gen-main">
+      <section class="gen-panel">
+        <h2>Параметры</h2>
+
+        <div class="gen-field">
+          <label for="rows">Количество строк</label>
+          <input id="rows" type="number" min="10" max="1000000" value="1000" />
+        </div>
+
+        <div class="gen-field">
+          <label for="seed">Seed (воспроизводимость)</label>
+          <input id="seed" type="number" value="42" />
+        </div>
+
+        <div class="gen-field">
+          <label for="missing">Пропуски в данных</label>
+          <select id="missing">
+            <option value="0">Нет</option>
+            <option value="0.05" selected>Немного (~5%)</option>
+            <option value="0.15">Заметно (~15%)</option>
+          </select>
+        </div>
+
+        <div class="gen-field">
+          <label for="seasonality">Сезонность</label>
+          <select id="seasonality">
+            <option value="1" selected>Да (пик в декабре)</option>
+            <option value="0">Нет</option>
+          </select>
+        </div>
+
+        <div class="gen-actions">
+          <button id="btn-xlsx" class="gen-btn primary">Скачать XLSX</button>
+          <button id="btn-csv" class="gen-btn">Скачать CSV</button>
+          <button id="btn-save" class="gen-btn">Сохранить в проект</button>
+          <label class="gen-checkbox">
+            <input type="checkbox" id="autosave" />
+            <span>Автосохранение при генерации</span>
+          </label>
+        </div>
+
+        <div class="gen-stats" id="stats"></div>
+        <div id="error" class="gen-error" style="display: none"></div>
+      </section>
+
+      <section class="gen-preview">
+        <div class="gen-preview-header">
+          <h2>Превью</h2>
+          <span class="gen-preview-hint" id="preview-hint">—</span>
+        </div>
+        <div class="gen-preview-body" id="preview"></div>
+      </section>
+    </main>
+
+    <script type="module" src="/src/generator.ts"></script>
+  </body>
+</html>
