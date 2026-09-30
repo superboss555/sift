@@ -4,13 +4,9 @@ node_modules/
 # === Сборка ===
 dist/
 
-# === Генерация Emscripten ===
-src/*.wasm
-src/*.js
-!src/main.ts
-!src/loader.ts
-!src/memory.ts
-!src/storage.ts
+# === Emscripten-генерация ===
+src/wasm/*.js
+src/wasm/*.wasm
 *.js.map
 
 # === ОС ===

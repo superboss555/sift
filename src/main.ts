@@ -1,8 +1,8 @@
 import './styles.css';
 
-import { loadFile, type ParsedData } from './loader.js';
-import { collectMemoryStats, formatBytes } from './memory.js';
-import { saveSession, loadSession, clearSession, sessionToFile } from './storage.js';
+import { loadFile, type ParsedData } from './lib/loader.js';
+import { collectMemoryStats, formatBytes } from './lib/memory.js';
+import { saveSession, loadSession, clearSession, sessionToFile } from './lib/storage.js';
 
 // === Валидация форматов ===
 const ALLOWED_EXTENSIONS = ['csv', 'xlsx', 'xls'] as const;
