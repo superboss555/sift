@@ -16,15 +16,28 @@ export interface SerializedDataSlot {
   legendText: string;
 }
 
+export interface SerializedBucket {
+  id: string;
+  name: string;
+  operator: string;
+  value1: number | null;
+  value2: number | null;
+}
+
 export interface SerializedCardSettings {
   title: string;
   showLegend: boolean;
+  showAxisLabels?: boolean;
+  legendText?: string;
   slots: [SerializedDataSlot | null, SerializedDataSlot | null];
   bins: number;
   yLabelOverride: string;
   topN: number;
   showGrid: boolean;
-  showAxisLabels: boolean;
+  precision?: number;
+  buckets?: SerializedBucket[];
+  bucketsShowName?: boolean;
+  renderMode?: "grouped" | "stacked";
 }
 
 export interface SerializedVizCard {

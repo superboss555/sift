@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "wasm": "em++ cpp/sift_core.cpp -O2 -o src/wasm/sift_core.js -lembind -s MODULARIZE=1 -s EXPORT_ES6=1 -s ENVIRONMENT=web -s ALLOW_MEMORY_GROWTH=1 -s EXPORTED_RUNTIME_METHODS=HEAPF64"
+    "wasm": "em++ cpp/sift_core.cpp -O2 -o src/wasm/sift_core.js -lembind -s MODULARIZE=1 -s EXPORT_ES6=1 -s ENVIRONMENT=web -s ALLOW_MEMORY_GROWTH=1 -s EXPORTED_RUNTIME_METHODS=HEAPF64,HEAP32"
   },
   "keywords": [
     "progressive-visualization",

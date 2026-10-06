@@ -11,15 +11,32 @@ import {
 
 import {
   runProgressiveHistogram,
+  runProgressiveBarChart,
+  runProgressiveBucketedHistogram,
+  runProgressiveGroupedHistogram,
   type HistogramHandle,
   type HistogramChunkResult,
+  type BarChartHandle,
+  type BarChartChunkResult,
+  type BucketedHistogramHandle,
+  type BucketedHistogramChunkResult,
+  type GroupedHistogramHandle,
+  type GroupedHistogramChunkResult,
 } from "./lib/sift-core.js";
-import { HistogramRenderer } from "./lib/renderers/histogram-renderer.js";
+
+import {
+  HistogramRenderer,
+  formatNumberPrecise,
+} from "./lib/renderers/histogram-renderer.js";
+
 import {
   BarChartRenderer,
   type BarChartCategory,
   type BarChartData,
 } from "./lib/renderers/barchart-renderer.js";
+
+import { GroupedHistogramRenderer } from "./lib/renderers/grouped-histogram-renderer.js";
+import { GroupedBarChartRenderer } from "./lib/renderers/grouped-barchart-renderer.js";
 
 import {
   saveVizState,
@@ -115,9 +132,6 @@ const togglePanelsBtn = document.getElementById(
 ) as HTMLButtonElement;
 const vizLayout = document.getElementById("viz-layout") as HTMLDivElement;
 const columnsList = document.getElementById("columns-list") as HTMLUListElement;
-const vizOptionsList = document.getElementById(
-  "viz-options-list",
-) as HTMLUListElement;
 
 // Прогресс в тулбаре
 const toolbarProgress = document.getElementById(
@@ -170,15 +184,57 @@ const datasetBrowserPath = document.getElementById(
 const badRowsModal = document.getElementById(
   "bad-rows-modal",
 ) as HTMLDivElement;
-const badRowsText = document.getElementById(
-  "bad-rows-text",
-) as HTMLParagraphElement;
-const badRowsTbody = document.getElementById(
-  "bad-rows-tbody",
+const badRowsErrorsCount = document.getElementById(
+  "bad-rows-errors-count",
+) as HTMLSpanElement;
+const badRowsWarningsCount = document.getElementById(
+  "bad-rows-warnings-count",
+) as HTMLSpanElement;
+const badRowsErrorsTbody = document.getElementById(
+  "bad-rows-tbody-errors",
+) as HTMLTableSectionElement;
+const badRowsWarningsTbody = document.getElementById(
+  "bad-rows-tbody-warnings",
 ) as HTMLTableSectionElement;
 const badRowsCancel = document.getElementById(
   "bad-rows-cancel",
 ) as HTMLButtonElement;
+
+// Глобальный тултип для значков «?»
+const infoTooltip = document.createElement("div");
+infoTooltip.className = "info-tooltip hidden";
+document.body.appendChild(infoTooltip);
+
+function showInfoTooltip(target: HTMLElement) {
+  const text = target.getAttribute("data-tooltip");
+  if (!text) return;
+  infoTooltip.textContent = text;
+  infoTooltip.classList.remove("hidden");
+
+  // Позиционируем: по умолчанию над значком, по центру
+  const rect = target.getBoundingClientRect();
+  const tipRect = infoTooltip.getBoundingClientRect();
+
+  let left = rect.left + rect.width / 2 - tipRect.width / 2;
+  let top = rect.top - tipRect.height - 10;
+
+  // Не вылезаем за края окна
+  if (left < 8) left = 8;
+  if (left + tipRect.width > window.innerWidth - 8) {
+    left = window.innerWidth - tipRect.width - 8;
+  }
+  // Если сверху нет места — показываем снизу
+  if (top < 8) {
+    top = rect.bottom + 10;
+  }
+
+  infoTooltip.style.left = `${left}px`;
+  infoTooltip.style.top = `${top}px`;
+}
+
+function hideInfoTooltip() {
+  infoTooltip.classList.add("hidden");
+}
 
 // ============================================================
 // СОСТОЯНИЕ ПРИЛОЖЕНИЯ
@@ -769,6 +825,15 @@ function escapeHtml(s: string): string {
   );
 }
 
+function formatNumberRu(x: number): string {
+  if (!isFinite(x)) return String(x);
+  const a = Math.abs(x);
+  if (a >= 1e6 || (a > 0 && a < 1e-3)) return x.toExponential(2);
+  if (Number.isInteger(x)) return x.toLocaleString("ru-RU");
+  if (a >= 100) return x.toFixed(1);
+  return x.toFixed(2);
+}
+
 // ============================================================
 // НАВИГАЦИЯ МЕЖДУ СТРАНИЦАМИ
 // ============================================================
@@ -899,11 +964,26 @@ function updateColumnsAvailability() {
 // ПАНЕЛЬ ВИЗУАЛИЗАЦИЙ
 // ============================================================
 
-const VIZ_OPTIONS = [
+interface VizOption {
+  id: string;
+  label: string;
+  types: string[];
+  section: "histogram" | "barchart" | "other";
+  /** Готов ли к использованию. Иначе — заглушка «скоро». */
+  enabled: boolean;
+  icon: string;
+  /** Заголовок карточки по умолчанию. Если не задан — берётся label. */
+  defaultTitle?: string;
+}
+
+const VIZ_OPTIONS: VizOption[] = [
+  // ============ ГИСТОГРАММЫ ============
   {
     id: "histogram",
-    label: "Гистограмма",
+    label: "С бинами",
     types: ["numeric"],
+    section: "histogram",
+    enabled: true,
     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="4" y1="20" x2="4" y2="14"/>
             <line x1="9" y1="20" x2="9" y2="8"/>
@@ -913,19 +993,90 @@ const VIZ_OPTIONS = [
         </svg>`,
   },
   {
+    id: "histogram-buckets",
+    label: "С диапазонами",
+    defaultTitle: "Гистограмма с диапазонами",
+    types: ["numeric"],
+    section: "histogram",
+    enabled: true,
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="14" width="5" height="6"/>
+            <rect x="9" y="8" width="5" height="12"/>
+            <rect x="15" y="4" width="6" height="16"/>
+            <line x1="2" y1="21" x2="22" y2="21"/>
+        </svg>`,
+  },
+  {
+    id: "histogram-grouped",
+    label: "С накоплением",
+    defaultTitle: "Гистограмма с группировкой",
+    // Карточке нужны оба типа: numeric (значения) + string (группировка).
+    // Поэтому в columns-list подсвечиваем и те, и другие как совместимые.
+    types: ["numeric", "string", "mixed"],
+    section: "histogram",
+    enabled: true,
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="4" y1="20" x2="4" y2="12"/>
+            <line x1="6" y1="20" x2="6" y2="16"/>
+            <line x1="11" y1="20" x2="11" y2="8"/>
+            <line x1="13" y1="20" x2="13" y2="13"/>
+            <line x1="18" y1="20" x2="18" y2="5"/>
+            <line x1="20" y1="20" x2="20" y2="10"/>
+            <line x1="2" y1="21" x2="22" y2="21"/>
+        </svg>`,
+  },
+
+  // ============ ЛИНЕЙЧАТЫЕ ============
+  {
     id: "barchart",
-    label: "Линейчатая диаграмма",
-    types: ["string", "mixed"],
+    label: "С бинами",
+    types: ["numeric"],
+    section: "barchart",
+    enabled: true,
     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="4" y1="6" x2="14" y2="6"/>
             <line x1="4" y1="12" x2="20" y2="12"/>
             <line x1="4" y1="18" x2="10" y2="18"/>
         </svg>`,
   },
+   {
+    id: "barchart-buckets",
+    label: "С диапазонами",
+    defaultTitle: "Линейчатая с диапазонами",
+    types: ["numeric"],
+    section: "barchart",
+    enabled: true,
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="4" y1="5" x2="18" y2="5"/>
+            <line x1="4" y1="10" x2="12" y2="10"/>
+            <line x1="4" y1="15" x2="20" y2="15"/>
+            <line x1="4" y1="20" x2="15" y2="20"/>
+        </svg>`,
+  },
+  {
+    id: "barchart-grouped",
+    label: "С накоплением",
+    defaultTitle: "Линейчатая с группировкой",
+    types: ["numeric", "string", "mixed"],
+    section: "barchart",
+    enabled: true,
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="4" y1="5" x2="20" y2="5"/>
+            <line x1="4" y1="6.5" x2="14" y2="6.5"/>
+            <line x1="4" y1="11" x2="20" y2="11"/>
+            <line x1="4" y1="12.5" x2="10" y2="12.5"/>
+            <line x1="4" y1="17" x2="20" y2="17"/>
+            <line x1="4" y1="18.5" x2="16" y2="18.5"/>
+        </svg>`,
+  },
+
+  // ============ ДРУГОЕ ============
   {
     id: "boxplot",
     label: "Box plot",
     types: ["numeric"],
+    section: "other",
+    enabled: true,
     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="12" y1="3" x2="12" y2="7"/>
             <line x1="12" y1="17" x2="12" y2="21"/>
@@ -935,8 +1086,10 @@ const VIZ_OPTIONS = [
   },
   {
     id: "piechart",
-    label: "Круговая диаграмма",
+    label: "Круговая",
     types: ["string", "mixed"],
+    section: "other",
+    enabled: true,
     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21.21 15.89A10 10 0 1 1 8 2.83"/>
             <path d="M22 12A10 10 0 0 0 12 2v10z"/>
@@ -944,8 +1097,10 @@ const VIZ_OPTIONS = [
   },
   {
     id: "summary",
-    label: "Сводка (среднее, медиана, ст. откл.)",
+    label: "Сводка",
     types: ["numeric"],
+    section: "other",
+    enabled: true,
     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="8" y1="6" x2="21" y2="6"/>
             <line x1="8" y1="12" x2="21" y2="12"/>
@@ -999,15 +1154,35 @@ interface DataSlot {
   legendText: string;
 }
 
+type BucketOperator = "lt" | "lte" | "gt" | "gte" | "eq" | "neq" | "range";
+
+interface Bucket {
+  id: string;
+  name: string;
+  operator: BucketOperator;
+  value1: number | null;
+  value2: number | null;
+}
+
 interface CardSettings {
   title: string;
   showLegend: boolean;
+  showAxisLabels: boolean;
+  legendText: string;
   slots: [DataSlot | null, DataSlot | null];
   bins: number;
   yLabelOverride: string;
   topN: number;
   showGrid: boolean;
-  showAxisLabels: boolean;
+  /** Знаков после запятой в подписях осей. 0 = целые. */
+  precision: number;
+  /** Группы для гистограммы/линейчатой с диапазонами. */
+  buckets: Bucket[];
+  /** Показывать на оси название группы или её условие. */
+  bucketsShowName: boolean;
+  
+  /** Режим отрисовки для группированной гистограммы. */
+  renderMode: "grouped" | "stacked";
 }
 
 // ============================================================
@@ -1040,12 +1215,9 @@ function buildVizSVG(card: VizCard): string {
     return buildHistogramSVG(xLabel, yLabel);
   }
   if (card.vizId === "barchart") {
-    const yLabel = getAxisLabel(slot0, "Категории", showLegend);
-    const xLabel = slot1
-      ? getAxisLabel(slot1, "Значения", showLegend)
-      : showLegend
-        ? card.settings.yLabelOverride.trim() || "Количество записей"
-        : "";
+    const showAxis = card.settings.showAxisLabels;
+    const xLabel = showAxis ? card.settings.yLabelOverride.trim() : "";
+    const yLabel = showAxis ? slot0?.legendText || "" : "";
     return buildBarchartSVG(xLabel, yLabel);
   }
 
@@ -1125,6 +1297,8 @@ function collectVizState(): VizState | null {
       settings: {
         title: c.settings.title,
         showLegend: c.settings.showLegend,
+        showAxisLabels: c.settings.showAxisLabels,
+        legendText: c.settings.legendText,
         slots: [
           c.settings.slots[0] ? { ...c.settings.slots[0] } : null,
           c.settings.slots[1] ? { ...c.settings.slots[1] } : null,
@@ -1133,7 +1307,10 @@ function collectVizState(): VizState | null {
         yLabelOverride: c.settings.yLabelOverride,
         topN: c.settings.topN,
         showGrid: c.settings.showGrid,
-        showAxisLabels: c.settings.showAxisLabels,
+        precision: c.settings.precision,
+        buckets: c.settings.buckets.map((b) => ({ ...b })),
+        bucketsShowName: c.settings.bucketsShowName,
+        renderMode: c.settings.renderMode,
       },
     })),
     activeCardId,
@@ -1169,8 +1346,13 @@ async function persistVizState() {
 /** Восстанавливает карточки из сохранённого состояния. */
 function restoreVizState(state: VizState) {
   // Чистим всё текущее
-  for (const id of [...runningHistograms.keys()]) stopHistogramForCard(id);
+    for (const id of [...runningHistograms.keys()]) stopHistogramForCard(id);
   for (const id of [...runningBars.keys()]) stopBarChartForCard(id);
+  for (const id of [...runningBucketedHistograms.keys()])
+    stopBucketedHistogramForCard(id);
+  for (const id of [...runningBucketedBars.keys()])
+    stopBucketedBarChartForCard(id);
+
   vizCards = [];
   activeCardId = null;
   vizCanvas.querySelectorAll(".viz-card").forEach((el) => el.remove());
@@ -1217,13 +1399,29 @@ function restoreVizState(state: VizState) {
       height: sc.height,
       settings: {
         title: sc.settings.title,
-        showLegend: sc.settings.showLegend,
+        showLegend: sc.settings.showLegend ?? false,
+        showAxisLabels: sc.settings.showAxisLabels ?? true,
+        legendText: sc.settings.legendText ?? "",
         slots: fixedSlots,
         bins: sc.settings.bins,
         yLabelOverride: sc.settings.yLabelOverride,
         topN: sc.settings.topN,
         showGrid: sc.settings.showGrid ?? true,
-        showAxisLabels: sc.settings.showAxisLabels ?? true,
+        precision: sc.settings.precision ?? 0,
+        buckets:
+          sc.settings.buckets && sc.settings.buckets.length > 0
+            ? sc.settings.buckets.map((b) => ({
+                id: b.id,
+                name: b.name,
+                operator: b.operator as BucketOperator,
+                value1: b.value1,
+                value2: b.value2,
+              }))
+            : [makeDefaultBucket(0)],
+        bucketsShowName: sc.settings.bucketsShowName ?? true,
+        renderMode:
+          (sc.settings as { renderMode?: "grouped" | "stacked" }).renderMode ??
+          "grouped",
       },
     };
     vizCards.push(card);
@@ -1874,6 +2072,16 @@ function findPlacement(
   };
 }
 
+function makeDefaultBucket(index: number): Bucket {
+  return {
+    id: `bucket-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+    name: `Группа ${index + 1}`,
+    operator: "lt",
+    value1: null,
+    value2: null,
+  };
+}
+
 function addVizCard(vizId: string): VizCard | null {
   const viz = VIZ_OPTIONS.find((v) => v.id === vizId);
   if (!viz) return null;
@@ -1881,6 +2089,12 @@ function addVizCard(vizId: string): VizCard | null {
   const id = `viz-card-${++cardCounter}`;
   const size = getDefaultSize(vizId);
   const pos = findPlacement(size.width, size.height);
+
+  const isBuckets =
+    vizId === "histogram-buckets" ||
+    vizId === "barchart-buckets" ||
+    vizId === "histogram-grouped" ||
+    vizId === "barchart-grouped";
 
   const card: VizCard = {
     id,
@@ -1890,14 +2104,27 @@ function addVizCard(vizId: string): VizCard | null {
     width: size.width,
     height: size.height,
     settings: {
-      title: viz.label,
+      title: viz.defaultTitle ?? viz.label,
       showLegend: false,
+      showAxisLabels: true,
+      legendText: "",
       slots: [null, null],
       bins: 30,
-      yLabelOverride: vizId === "histogram" ? "Частота" : "",
+      yLabelOverride:
+        vizId === "histogram" ||
+        vizId === "barchart" ||
+        vizId === "histogram-buckets" ||
+        vizId === "barchart-buckets" ||
+        vizId === "histogram-grouped" ||
+        vizId === "barchart-grouped"
+          ? "Частота"
+          : "",
       topN: 0,
       showGrid: true,
-      showAxisLabels: true,
+      precision: 0,
+      buckets: isBuckets ? [makeDefaultBucket(0)] : [],
+      bucketsShowName: true,
+      renderMode: "grouped",
     },
   };
 
@@ -2008,7 +2235,7 @@ function makeDraggable(el: HTMLElement, card: VizCard) {
       renderGuides(segments);
     };
 
-        const onStop = () => {
+    const onStop = () => {
       el.classList.remove("dragging");
       clearGuides();
       document.removeEventListener("pointermove", onMove);
@@ -2107,7 +2334,7 @@ function makeResizable(el: HTMLElement, card: VizCard) {
       renderGuides(segments);
     };
 
-        const onStop = () => {
+    const onStop = () => {
       el.classList.remove("resizing");
       clearGuides();
       document.removeEventListener("pointermove", onMove);
@@ -2127,6 +2354,10 @@ function makeResizable(el: HTMLElement, card: VizCard) {
 function removeVizCard(cardId: string) {
   stopHistogramForCard(cardId);
   stopBarChartForCard(cardId);
+  stopBucketedHistogramForCard(cardId);
+  stopBucketedBarChartForCard(cardId);
+  stopGroupedHistogramForCard(cardId);
+  stopGroupedBarChartForCard(cardId);
 
   vizCards = vizCards.filter((c) => c.id !== cardId);
   const el = document.getElementById(cardId);
@@ -2166,34 +2397,7 @@ function setActiveCard(cardId: string | null) {
   scheduleSaveVizState();
 }
 
-// ---------- Реакция на изменение размеров поля ----------
 
-const canvasResizeObserver = new ResizeObserver(() => {
-  const boundsW = vizCanvas.clientWidth;
-  const boundsH = vizCanvas.clientHeight;
-
-  vizCards.forEach((card) => {
-    const el = document.getElementById(card.id);
-    if (!el) return;
-
-    let changed = false;
-    if (card.x + card.width > boundsW) {
-      card.x = Math.max(0, boundsW - card.width);
-      changed = true;
-    }
-    if (card.y + card.height > boundsH) {
-      card.y = Math.max(0, boundsH - card.height);
-      changed = true;
-    }
-
-    if (changed) {
-      el.style.left = `${card.x}px`;
-      el.style.top = `${card.y}px`;
-    }
-  });
-});
-
-canvasResizeObserver.observe(vizCanvas);
 
 // Клик по пустому месту рабочего поля — снять выделение.
 // Это переключает индикатор в тулбаре в режим «суммарный».
@@ -2210,25 +2414,72 @@ vizCanvas.addEventListener("pointerdown", (e) => {
 // ---------- Панель иконок ----------
 
 function renderVizOptions() {
-  vizOptionsList.innerHTML = VIZ_OPTIONS.map(
-    (opt) => `
-        <li
-            class="viz-option"
-            data-option-id="${opt.id}"
-            data-option-label="${opt.label}"
-            title="${opt.label}"
-        >
-            ${opt.icon}
-        </li>
-    `,
-  ).join("");
+  const histogramList = document.getElementById(
+    "viz-options-histogram",
+  ) as HTMLUListElement;
+  const barchartList = document.getElementById(
+    "viz-options-barchart",
+  ) as HTMLUListElement;
+  const otherList = document.getElementById(
+    "viz-options-other",
+  ) as HTMLUListElement;
 
-  vizOptionsList.querySelectorAll("li").forEach((li) => {
-    li.addEventListener("click", () => {
-      const id = li.getAttribute("data-option-id");
-      if (id) selectVisualization(id);
+  const listsBySection: Record<string, HTMLUListElement> = {
+    histogram: histogramList,
+    barchart: barchartList,
+    other: otherList,
+  };
+
+  const renderItem = (opt: VizOption) => `
+    <li
+      class="viz-option${opt.enabled ? "" : " disabled"}"
+      data-option-id="${opt.id}"
+      data-option-label="${opt.label}"
+      title="${opt.label}${opt.enabled ? "" : " — в разработке"}"
+    >
+      ${opt.icon}
+    </li>
+  `;
+
+  for (const key of Object.keys(listsBySection)) {
+    const list = listsBySection[key];
+    if (!list) continue;
+    const items = VIZ_OPTIONS.filter((o) => o.section === key);
+    list.innerHTML = items.map(renderItem).join("");
+
+    list.querySelectorAll<HTMLLIElement>("li").forEach((li) => {
+      li.addEventListener("click", () => {
+        const id = li.getAttribute("data-option-id");
+        if (!id) return;
+        const opt = VIZ_OPTIONS.find((o) => o.id === id);
+        if (!opt) return;
+        if (!opt.enabled) {
+          // Заглушка — показываем всплывающую подсказку «в разработке»
+          infoTooltip.textContent = `«${opt.label}» — в разработке`;
+          infoTooltip.classList.remove("hidden");
+
+          const rect = li.getBoundingClientRect();
+          const tipRect = infoTooltip.getBoundingClientRect();
+          let left = rect.right + 10;
+          let top = rect.top + rect.height / 2 - tipRect.height / 2;
+
+          if (left + tipRect.width > window.innerWidth - 8) {
+            left = rect.left - tipRect.width - 10;
+          }
+          if (top < 8) top = 8;
+          if (top + tipRect.height > window.innerHeight - 8) {
+            top = window.innerHeight - tipRect.height - 8;
+          }
+
+          infoTooltip.style.left = `${left}px`;
+          infoTooltip.style.top = `${top}px`;
+          window.setTimeout(hideInfoTooltip, 1800);
+          return;
+        }
+        selectVisualization(id);
+      });
     });
-  });
+  }
 }
 
 function selectVisualization(vizId: string) {
@@ -2241,6 +2492,10 @@ function selectVisualization(vizId: string) {
 function resetVizOptions() {
   for (const id of [...runningHistograms.keys()]) stopHistogramForCard(id);
   for (const id of [...runningBars.keys()]) stopBarChartForCard(id);
+  for (const id of [...runningBucketedHistograms.keys()])
+    stopBucketedHistogramForCard(id);
+  for (const id of [...runningBucketedBars.keys()])
+    stopBucketedBarChartForCard(id);
 
   vizCards = [];
   activeCardId = null;
@@ -2263,6 +2518,7 @@ function resetVizOptions() {
 // ============================================================
 
 settingsCloseBtn.addEventListener("click", () => closeSettingsPanel());
+settingsContent.addEventListener("scroll", hideInfoTooltip, { passive: true });
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && settingsPanel.classList.contains("open")) {
@@ -2292,6 +2548,137 @@ function closeSettingsPanel() {
   settingsPanel.classList.remove("open");
 }
 
+const BUCKET_OPERATOR_OPTIONS: { value: BucketOperator; label: string }[] = [
+  { value: "lt", label: "Меньше" },
+  { value: "lte", label: "Меньше или равно" },
+  { value: "gt", label: "Больше" },
+  { value: "gte", label: "Больше или равно" },
+  { value: "eq", label: "Равно" },
+  { value: "neq", label: "Не равно" },
+  { value: "range", label: "Диапазон (от–до)" },
+];
+
+function bucketOperatorSymbol(op: BucketOperator): string {
+  switch (op) {
+    case "lt":
+      return "<";
+    case "lte":
+      return "≤";
+    case "gt":
+      return ">";
+    case "gte":
+      return "≥";
+    case "eq":
+      return "=";
+    case "neq":
+      return "≠";
+    case "range":
+      return "↔";
+  }
+}
+
+function matchesBucket(value: number, b: Bucket): boolean {
+  const v1 = b.value1;
+  const v2 = b.value2;
+  switch (b.operator) {
+    case "lt":
+      return v1 != null && value < v1;
+    case "lte":
+      return v1 != null && value <= v1;
+    case "gt":
+      return v1 != null && value > v1;
+    case "gte":
+      return v1 != null && value >= v1;
+    case "eq":
+      return v1 != null && value === v1;
+    case "neq":
+      return v1 != null && value !== v1;
+    case "range":
+      return v1 != null && v2 != null && value >= v1 && value <= v2;
+  }
+}
+
+
+function formatBucketCondition(b: Bucket): string {
+  const v1 = b.value1 != null ? b.value1 : "—";
+  const v2 = b.value2 != null ? b.value2 : "—";
+  if (b.operator === "range") {
+    return `${v1}–${v2}`;
+  }
+  return `${bucketOperatorSymbol(b.operator)} ${v1}`;
+}
+
+function renderBucketCard(b: Bucket, index: number, total: number): string {
+  const canRemove = total > 1;
+  const isRange = b.operator === "range";
+
+  const opSelectHtml = `
+    <select class="settings-select bucket-op" data-bucket-op>
+      ${BUCKET_OPERATOR_OPTIONS.map(
+        (opt) =>
+          `<option value="${opt.value}" ${opt.value === b.operator ? "selected" : ""}>${opt.label}</option>`,
+      ).join("")}
+    </select>
+  `;
+
+  const conditionHtml = isRange
+    ? `
+      <div class="bucket-condition range">
+        ${opSelectHtml}
+        <div class="bucket-range-row">
+          <input type="number" class="settings-input bucket-v1"
+                 data-bucket-v1
+                 value="${b.value1 ?? ""}"
+                 placeholder="от"
+                 step="any" />
+          <input type="number" class="settings-input bucket-v2"
+                 data-bucket-v2
+                 value="${b.value2 ?? ""}"
+                 placeholder="до"
+                 step="any" />
+        </div>
+      </div>
+    `
+    : `
+      <div class="bucket-condition">
+        ${opSelectHtml}
+        <input type="number" class="settings-input bucket-v1"
+               data-bucket-v1
+               value="${b.value1 ?? ""}"
+               placeholder="знач."
+               step="any" />
+      </div>
+    `;
+
+  return `
+    <div class="bucket-card" data-bucket-id="${escapeHtml(b.id)}">
+      <div class="bucket-card-header">
+        <span class="bucket-card-num">${index + 1}</span>
+        <button
+          class="bucket-card-remove"
+          data-remove-bucket
+          title="${canRemove ? "Удалить группу" : "Нельзя удалить единственную группу"}"
+          ${canRemove ? "" : "disabled"}
+        >×</button>
+      </div>
+
+      <div class="settings-field">
+        <label class="settings-label">Название</label>
+        <input type="text" class="settings-input"
+               data-bucket-name
+               value="${escapeHtml(b.name)}"
+               placeholder="Empty" />
+      </div>
+
+      <div class="settings-field">
+        <label class="settings-label">Условие</label>
+        ${conditionHtml}
+      </div>
+    </div>
+  `;
+}
+
+
 function renderSettingsContent(cardId: string) {
   const card = vizCards.find((c) => c.id === cardId);
   if (!card) {
@@ -2310,102 +2697,217 @@ function renderSettingsContent(cardId: string) {
   const s = card.settings;
   const [slot0, slot1] = s.slots;
   const isHistogram = card.vizId === "histogram";
+  const isHistogramBuckets = card.vizId === "histogram-buckets";
+  const isHistogramGrouped = card.vizId === "histogram-grouped";
   const isBarChart = card.vizId === "barchart";
+  const isBarChartBuckets = card.vizId === "barchart-buckets";
+  const isBarChartGrouped = card.vizId === "barchart-grouped";
+  const isBuckets = isHistogramBuckets || isBarChartBuckets;
+  const hasBuckets = isBuckets || isHistogramGrouped || isBarChartGrouped;
+  /** Любая grouped/stacked-визуализация (гисто или линейчатая). */
+  const isGrouped = isHistogramGrouped || isBarChartGrouped;
 
   // ---------- Легенда ----------
   let legendFieldsHtml = "";
-
-  if (isHistogram && slot0) {
-    legendFieldsHtml += `
+  if (slot0) {
+    legendFieldsHtml = `
       <div class="settings-field">
-        <label class="settings-label">Подпись оси X</label>
+        <label class="settings-label">Текст легенды</label>
         <input type="text" class="settings-input"
-               data-legend-slot="0"
-               value="${escapeHtml(slot0.legendText)}"
-               placeholder="${escapeHtml(slot0.name)}"
-               ${s.showLegend ? "" : "disabled"} />
-      </div>
-      <div class="settings-field">
-        <label class="settings-label">Подпись оси Y</label>
-        <input type="text" class="settings-input"
-               data-legend-y
-               value="${escapeHtml(s.yLabelOverride)}"
-               placeholder="Частота"
-               ${s.showLegend ? "" : "disabled"} />
-      </div>`;
-  }
-
-  if (isBarChart && slot0) {
-    legendFieldsHtml += `
-      <div class="settings-field">
-        <label class="settings-label">Подпись категорий (ось Y)</label>
-        <input type="text" class="settings-input"
-               data-legend-slot="0"
-               value="${escapeHtml(slot0.legendText)}"
+               data-legend-text
+               value="${escapeHtml(s.legendText)}"
                placeholder="${escapeHtml(slot0.name)}"
                ${s.showLegend ? "" : "disabled"} />
       </div>`;
-
-    const xVal = slot1
-      ? slot1.legendText
-      : s.yLabelOverride || "Количество записей";
-    const xPlaceholder = slot1 ? slot1.name : "Количество записей";
-
-    legendFieldsHtml += `
-      <div class="settings-field">
-        <label class="settings-label">Подпись значений (ось X)</label>
-        <input type="text" class="settings-input"
-               data-legend-x
-               value="${escapeHtml(xVal)}"
-               placeholder="${escapeHtml(xPlaceholder)}"
-               ${s.showLegend ? "" : "disabled"} />
-      </div>`;
+  } else {
+    legendFieldsHtml = `<p class="settings-hint">Перетащите колонку в «Данные» — легенда появится здесь.</p>`;
   }
 
-  if (!legendFieldsHtml) {
-    legendFieldsHtml = `<p class="settings-hint">Сначала перетащите данные ниже — подписи появятся здесь.</p>`;
+  // ---------- Подписи на осях ----------
+  let axisFieldsHtml = "";
+  if (slot0) {
+    if (isHistogram || isHistogramBuckets) {
+      axisFieldsHtml = `
+        <div class="settings-field">
+          <label class="settings-label">Подпись оси X (значения)</label>
+          <input type="text" class="settings-input"
+                 data-axis-x
+                 value="${escapeHtml(slot0.legendText)}"
+                 placeholder="${escapeHtml(slot0.name)}"
+                 ${s.showAxisLabels ? "" : "disabled"} />
+        </div>
+        <div class="settings-field">
+          <label class="settings-label">Подпись оси Y (частота)</label>
+          <input type="text" class="settings-input"
+                 data-axis-y
+                 value="${escapeHtml(s.yLabelOverride)}"
+                 placeholder="Частота"
+                 ${s.showAxisLabels ? "" : "disabled"} />
+        </div>`;
+    } else {
+      axisFieldsHtml = `
+        <div class="settings-field">
+          <label class="settings-label">Подпись оси X (частота)</label>
+          <input type="text" class="settings-input"
+                 data-axis-y
+                 value="${escapeHtml(s.yLabelOverride)}"
+                 placeholder="Частота"
+                 ${s.showAxisLabels ? "" : "disabled"} />
+        </div>
+        <div class="settings-field">
+          <label class="settings-label">Подпись оси Y (значения)</label>
+          <input type="text" class="settings-input"
+                 data-axis-x
+                 value="${escapeHtml(slot0.legendText)}"
+                 placeholder="${escapeHtml(slot0.name)}"
+                 ${s.showAxisLabels ? "" : "disabled"} />
+        </div>`;
+    }
+  } else {
+    axisFieldsHtml = `<p class="settings-hint">Перетащите колонку в «Данные» — подписи появятся здесь.</p>`;
   }
 
   // ---------- Данные ----------
-  const dataSlotsHtml = isHistogram
-    ? `
-      <div class="settings-slot">
-        <label class="settings-label">Значения (числовая колонка)</label>
-        <div class="settings-dropzone" data-dropzone="0">
-          ${renderSlotContent(slot0, 0)}
+    let dataSlotsHtml = "";
+    if (isGrouped) {
+      dataSlotsHtml = `
+        <div class="settings-slot">
+          <label class="settings-label">Значения (числовая колонка)</label>
+          <div class="settings-dropzone"
+               data-dropzone="0"
+               data-expected-type="numeric">
+            ${renderSlotContent(slot0, 0)}
+          </div>
         </div>
-      </div>
-      <p class="settings-hint">Ось Y (частота) рассчитывается автоматически.</p>
-    `
-    : `
-      <div class="settings-slot">
-        <label class="settings-label">Категории (текстовая колонка)</label>
-        <div class="settings-dropzone" data-dropzone="0">
-          ${renderSlotContent(slot0, 0)}
+        <div class="settings-slot">
+          <label class="settings-label">Группировка (категориальная колонка)</label>
+          <div class="settings-dropzone"
+               data-dropzone="1"
+               data-expected-type="string">
+            ${renderSlotContent(slot1, 1)}
+          </div>
         </div>
-      </div>
-      <div class="settings-slot">
-        <label class="settings-label">Значения (числовая колонка, опционально)</label>
-        <div class="settings-dropzone" data-dropzone="1">
-          ${renderSlotContent(slot1, 1)}
+        <p class="settings-hint">Ось Y — частота. Цвета соответствуют категориям.</p>
+      `;
+    } else if (
+      isHistogram ||
+      isHistogramBuckets ||
+      isBarChart ||
+      isBarChartBuckets ||
+      card.vizId === "boxplot" ||
+      card.vizId === "summary"
+    ) {
+      dataSlotsHtml = `
+        <div class="settings-slot">
+          <label class="settings-label">Значения (числовая колонка)</label>
+          <div class="settings-dropzone"
+               data-dropzone="0"
+               data-expected-type="numeric">
+            ${renderSlotContent(slot0, 0)}
+          </div>
         </div>
-      </div>
-      ${
-        !slot1
-          ? `<p class="settings-hint">Если не выбрано — считается количество записей.</p>`
-          : ""
-      }
-    `;
+        <p class="settings-hint">Ось Y (частота) рассчитывается автоматически.</p>
+      `;
+    } else if (card.vizId === "piechart") {
+      dataSlotsHtml = `
+        <div class="settings-slot">
+          <label class="settings-label">Категории (строковая колонка)</label>
+          <div class="settings-dropzone"
+               data-dropzone="0"
+               data-expected-type="string">
+            ${renderSlotContent(slot0, 0)}
+          </div>
+        </div>
+        <p class="settings-hint">Показывается доля каждой уникальной категории.</p>
+      `;
+    } else {
+      dataSlotsHtml = `
+        <div class="settings-slot">
+          <label class="settings-label">Значения</label>
+          <div class="settings-dropzone" data-dropzone="0">
+            ${renderSlotContent(slot0, 0)}
+          </div>
+        </div>
+        <p class="settings-hint">Показывается количество записей для каждого уникального значения.</p>
+      `;
+    }
+
+  // ---------- Диапазоны данных ----------
+  let bucketsHtml = "";
+  if (hasBuckets) {
+    bucketsHtml = `
+      <div class="settings-block">
+        <div class="buckets-header">
+          <h5 class="settings-block-title">
+            Диапазоны данных — <b>${s.buckets.length}</b><span
+              class="info-icon"
+data-tooltip="Крайние значения диапазона входят в группу.
+Если условия групп пересекаются, значение попадёт в ту группу, которая расположена выше в списке.">?</span
+            >
+          </h5>
+          <button class="buckets-add-btn" data-add-bucket title="Добавить группу">+</button>
+        </div>
+        <div class="buckets-list">
+          ${s.buckets.map((b, i) => renderBucketCard(b, i, s.buckets.length)).join("")}
+        </div>
+        <label class="settings-checkbox">
+          <input type="checkbox" data-buckets-show-name ${s.bucketsShowName ? "checked" : ""} />
+          <span>Показывать на оси название группы</span>
+        </label>
+      </div>`;
+  }
 
   // ---------- Параметры ----------
   let paramsHtml = "";
-  if (isHistogram) {
+  if (isGrouped) {
+    paramsHtml = `
+      <div class="settings-block">
+        <h5 class="settings-block-title">Параметры</h5>
+        <div class="settings-field">
+          <label class="settings-label">Режим отрисовки</label>
+          <select class="settings-select" data-setting="renderMode">
+            <option value="grouped" ${s.renderMode === "grouped" ? "selected" : ""}>Рядом (Grouped)</option>
+            <option value="stacked" ${s.renderMode === "stacked" ? "selected" : ""}>Стопкой (Stacked)</option>
+          </select>
+        </div>
+        <div class="settings-field">
+          <label class="settings-label">Топ-N категорий (0 = все)</label>
+          <input type="number" class="settings-input" min="0" max="50" data-setting="topN" value="${s.topN}" />
+        </div>
+        <div class="settings-field">
+          <div class="settings-label-row">
+            <span class="settings-label">
+              Точность<span
+                class="info-icon"
+                data-tooltip="Количество знаков после запятой в подписях осей. 0 – округление до целых чисел."
+                >?</span
+              >
+            </span>
+            <span class="settings-value" data-precision-value>${s.precision}</span>
+          </div>
+          <input type="range" class="settings-range"
+                 data-setting="precision"
+                 min="0" max="5" step="1"
+                 value="${s.precision}" />
+        </div>
+        <label class="settings-checkbox">
+          <input type="checkbox" data-setting="showGrid" ${s.showGrid ? "checked" : ""} />
+          <span>Показывать сетку</span>
+        </label>
+      </div>`;
+  } else if (isHistogram || isBarChart) {
     paramsHtml = `
       <div class="settings-block">
         <h5 class="settings-block-title">Параметры</h5>
         <div class="settings-field">
           <div class="settings-label-row">
-            <span class="settings-label">Количество бинов</span>
+            <span class="settings-label">
+              Количество бинов<span
+                class="info-icon"
+                data-tooltip="Бины – интервалы, на которые делится диапазон значений. Больше бинов – детальнее гистограмма, но заметнее шум. Меньше бинов – более гладкая форма распределения."
+                >?</span
+              >
+            </span>
             <span class="settings-value" data-bins-value>${s.bins}</span>
           </div>
           <input type="range" class="settings-range"
@@ -2413,24 +2915,56 @@ function renderSettingsContent(cardId: string) {
                  min="5" max="200" step="1"
                  value="${s.bins}" />
         </div>
+        <div class="settings-field">
+          <label class="settings-label">Топ-N бинов (0 = все)</label>
+          <input type="number" class="settings-input" min="0" max="1000"
+                 data-setting="topN" value="${s.topN}" />
+        </div>
+        <div class="settings-field">
+          <div class="settings-label-row">
+            <span class="settings-label">
+              Точность<span
+                class="info-icon"
+                data-tooltip="Количество знаков после запятой в подписях осей. 0 – округление до целых чисел."
+                >?</span
+              >
+            </span>
+            <span class="settings-value" data-precision-value>${s.precision}</span>
+          </div>
+          <input type="range" class="settings-range"
+                 data-setting="precision"
+                 min="0" max="5" step="1"
+                 value="${s.precision}" />
+        </div>
         <label class="settings-checkbox">
           <input type="checkbox" data-setting="showGrid" ${s.showGrid ? "checked" : ""} />
           <span>Показывать сетку</span>
         </label>
-        <label class="settings-checkbox">
-          <input type="checkbox" data-setting="showAxisLabels" ${s.showAxisLabels ? "checked" : ""} />
-          <span>Показывать значения на осях</span>
-        </label>
       </div>`;
-  } else if (isBarChart) {
+  } else if (hasBuckets) {
     paramsHtml = `
       <div class="settings-block">
         <h5 class="settings-block-title">Параметры</h5>
         <div class="settings-field">
-          <label class="settings-label">Топ-N категорий (0 = все)</label>
-          <input type="number" class="settings-input" min="0" max="10000"
-                 data-setting="topN" value="${s.topN}" />
+          <div class="settings-label-row">
+            <span class="settings-label">
+              Точность<span
+                class="info-icon"
+                data-tooltip="Количество знаков после запятой в подписях осей. 0 – округление до целых чисел."
+                >?</span
+              >
+            </span>
+            <span class="settings-value" data-precision-value>${s.precision}</span>
+          </div>
+          <input type="range" class="settings-range"
+                 data-setting="precision"
+                 min="0" max="5" step="1"
+                 value="${s.precision}" />
         </div>
+        <label class="settings-checkbox">
+          <input type="checkbox" data-setting="showGrid" ${s.showGrid ? "checked" : ""} />
+          <span>Показывать сетку</span>
+        </label>
       </div>`;
   }
 
@@ -2451,7 +2985,18 @@ function renderSettingsContent(cardId: string) {
       ${legendFieldsHtml}
     </div>
 
+    ${bucketsHtml}
+
     ${paramsHtml}
+
+    <div class="settings-block">
+      <h5 class="settings-block-title">Подписи на осях</h5>
+      <label class="settings-checkbox">
+        <input type="checkbox" data-setting="showAxisLabels" ${s.showAxisLabels ? "checked" : ""} />
+        <span>Показывать подписи на осях</span>
+      </label>
+      ${axisFieldsHtml}
+    </div>
 
     <div class="settings-block">
       <h5 class="settings-block-title">Данные</h5>
@@ -2476,49 +3021,57 @@ function renderSettingsContent(cardId: string) {
   legendCheck.addEventListener("change", () => {
     s.showLegend = legendCheck.checked;
     renderSettingsContent(cardId);
-    syncCardVisual(card);
+    redrawActive(card);
     scheduleSaveVizState();
   });
 
-  // ---------- Легенда: слот 0 ----------
-  settingsContent
-    .querySelectorAll<HTMLInputElement>("[data-legend-slot]")
-    .forEach((input) => {
-      const i = Number(input.getAttribute("data-legend-slot")) as 0 | 1;
-      input.addEventListener("input", () => {
-        const slot = s.slots[i];
-        if (!slot) return;
-        slot.legendText = input.value;
-        redrawActive(card);
-        scheduleSaveVizState();
-      });
-    });
-
-  // ---------- Легенда: подпись Y (гистограмма) ----------
-  const yOverrideInput = settingsContent.querySelector(
-    "[data-legend-y]",
+  // ---------- Легенда: текст ----------
+  const legendTextInput = settingsContent.querySelector(
+    "[data-legend-text]",
   ) as HTMLInputElement | null;
-  if (yOverrideInput) {
-    yOverrideInput.addEventListener("input", () => {
-      s.yLabelOverride = yOverrideInput.value;
+  if (legendTextInput) {
+    legendTextInput.addEventListener("input", () => {
+      s.legendText = legendTextInput.value;
       redrawActive(card);
       scheduleSaveVizState();
     });
   }
 
-  // ---------- Легенда: подпись X (barchart) ----------
-  const xOverrideInput = settingsContent.querySelector(
-    "[data-legend-x]",
+  // ---------- Подписи на осях ----------
+  const axisCheck = settingsContent.querySelector(
+    '[data-setting="showAxisLabels"]',
   ) as HTMLInputElement | null;
-  if (xOverrideInput) {
-    xOverrideInput.addEventListener("input", () => {
-      if (slot1) {
-        slot1.legendText = xOverrideInput.value;
-        redrawActive(card);
-      } else {
-        s.yLabelOverride = xOverrideInput.value;
-        redrawActive(card);
-      }
+  if (axisCheck) {
+    axisCheck.addEventListener("change", () => {
+      s.showAxisLabels = axisCheck.checked;
+      renderSettingsContent(cardId);
+      redrawActive(card);
+      scheduleSaveVizState();
+    });
+  }
+
+  // ---------- Подпись оси X ----------
+  const axisXInput = settingsContent.querySelector(
+    "[data-axis-x]",
+  ) as HTMLInputElement | null;
+  if (axisXInput) {
+    axisXInput.addEventListener("input", () => {
+      const slot = s.slots[0];
+      if (!slot) return;
+      slot.legendText = axisXInput.value;
+      redrawActive(card);
+      scheduleSaveVizState();
+    });
+  }
+
+  // ---------- Подпись оси Y ----------
+  const axisYInput = settingsContent.querySelector(
+    "[data-axis-y]",
+  ) as HTMLInputElement | null;
+  if (axisYInput) {
+    axisYInput.addEventListener("input", () => {
+      s.yLabelOverride = axisYInput.value;
+      redrawActive(card);
       scheduleSaveVizState();
     });
   }
@@ -2538,7 +3091,21 @@ function renderSettingsContent(cardId: string) {
     });
   }
 
-  // ---------- Сетка и подписи осей ----------
+  // ---------- Точность ----------
+  const precisionInput = settingsContent.querySelector(
+    '[data-setting="precision"]',
+  ) as HTMLInputElement | null;
+  if (precisionInput) {
+    precisionInput.addEventListener("input", () => {
+      s.precision = Math.max(0, Math.min(5, Number(precisionInput.value)));
+      const lbl = settingsContent.querySelector("[data-precision-value]");
+      if (lbl) lbl.textContent = String(s.precision);
+      redrawActive(card);
+      scheduleSaveVizState();
+    });
+  }
+
+  // ---------- Сетка ----------
   const gridCheck = settingsContent.querySelector(
     '[data-setting="showGrid"]',
   ) as HTMLInputElement | null;
@@ -2550,12 +3117,13 @@ function renderSettingsContent(cardId: string) {
     });
   }
 
-  const axisCheck = settingsContent.querySelector(
-    '[data-setting="showAxisLabels"]',
-  ) as HTMLInputElement | null;
-  if (axisCheck) {
-    axisCheck.addEventListener("change", () => {
-      s.showAxisLabels = axisCheck.checked;
+  // ---------- Режим отрисовки (Grouped / Stacked) ----------
+  const renderModeSelect = settingsContent.querySelector(
+    '[data-setting="renderMode"]',
+  ) as HTMLSelectElement | null;
+  if (renderModeSelect) {
+    renderModeSelect.addEventListener("change", () => {
+      s.renderMode = renderModeSelect.value as "grouped" | "stacked";
       redrawActive(card);
       scheduleSaveVizState();
     });
@@ -2594,6 +3162,124 @@ function renderSettingsContent(cardId: string) {
       const i = Number(zone.getAttribute("data-dropzone")) as 0 | 1;
       setupDropzone(zone, card, i);
     });
+
+  // ---------- Информационные значки «?» ----------
+  settingsContent
+    .querySelectorAll<HTMLElement>(".info-icon")
+    .forEach((icon) => {
+      icon.addEventListener("mouseenter", () => showInfoTooltip(icon));
+      icon.addEventListener("mouseleave", hideInfoTooltip);
+    });
+
+  // ---------- Диапазоны данных ----------
+  if (hasBuckets) {
+    const addBtn = settingsContent.querySelector(
+      "[data-add-bucket]",
+    ) as HTMLButtonElement | null;
+    if (addBtn) {
+      addBtn.addEventListener("click", () => {
+        s.buckets.push(makeDefaultBucket(s.buckets.length));
+        renderSettingsContent(cardId);
+        scheduleSaveVizState();
+      });
+    }
+
+    settingsContent
+      .querySelectorAll<HTMLButtonElement>("[data-remove-bucket]")
+      .forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (s.buckets.length <= 1) return;
+          const cardEl = btn.closest(".bucket-card");
+          const bucketId = cardEl?.getAttribute("data-bucket-id");
+          if (!bucketId) return;
+          const idx = s.buckets.findIndex((b) => b.id === bucketId);
+          if (idx < 0) return;
+          s.buckets.splice(idx, 1);
+          renderSettingsContent(cardId);
+          scheduleSaveVizState();
+        });
+      });
+
+    settingsContent
+      .querySelectorAll<HTMLElement>(".bucket-card")
+      .forEach((cardEl) => {
+        const bucketId = cardEl.getAttribute("data-bucket-id");
+        if (!bucketId) return;
+        const bucket = s.buckets.find((b) => b.id === bucketId);
+        if (!bucket) return;
+
+        const nameInput = cardEl.querySelector(
+          "[data-bucket-name]",
+        ) as HTMLInputElement | null;
+        if (nameInput) {
+          nameInput.addEventListener("input", () => {
+            bucket.name = nameInput.value;
+            redrawActive(card);
+            scheduleSaveVizState();
+          });
+        }
+
+        const opSelect = cardEl.querySelector(
+          "[data-bucket-op]",
+        ) as HTMLSelectElement | null;
+        if (opSelect) {
+          opSelect.addEventListener("change", () => {
+            const nextOp = opSelect.value as BucketOperator;
+            if (nextOp !== bucket.operator) {
+              bucket.operator = nextOp;
+              if (nextOp === "range" && bucket.value2 == null) {
+                bucket.value2 = bucket.value1;
+              }
+              renderSettingsContent(cardId);
+              scheduleSaveVizState();
+              syncCardVisual(card);
+            }
+          });
+        }
+
+        const v1Input = cardEl.querySelector(
+          "[data-bucket-v1]",
+        ) as HTMLInputElement | null;
+        if (v1Input) {
+          v1Input.addEventListener("input", () => {
+            const raw = v1Input.value.trim();
+            bucket.value1 = raw === "" ? null : Number(raw);
+            if (Number.isNaN(bucket.value1)) bucket.value1 = null;
+            scheduleSaveVizState();
+          });
+          v1Input.addEventListener("change", () => {
+            syncCardVisual(card);        // ← пересчёт на blur/enter
+          });
+        }
+
+        const v2Input = cardEl.querySelector(
+          "[data-bucket-v2]",
+        ) as HTMLInputElement | null;
+        if (v2Input) {
+          v2Input.addEventListener("input", () => {
+            const raw = v2Input.value.trim();
+            bucket.value2 = raw === "" ? null : Number(raw);
+            if (Number.isNaN(bucket.value2)) bucket.value2 = null;
+            scheduleSaveVizState();
+          });
+          v2Input.addEventListener("change", () => {
+            syncCardVisual(card);        // ← пересчёт на blur/enter
+          });
+        }
+      });
+
+      const showNameCheck = settingsContent.querySelector(
+      "[data-buckets-show-name]",
+    ) as HTMLInputElement | null;
+    if (showNameCheck) {
+      showNameCheck.addEventListener("change", () => {
+        s.bucketsShowName = showNameCheck.checked;
+        redrawActive(card);
+        scheduleSaveVizState();
+      });
+    }
+  }
 }
 
 function renderSlotContent(slot: DataSlot | null, slotIndex: 0 | 1): string {
@@ -2641,19 +3327,23 @@ function setupDropzone(dropzone: HTMLElement, card: VizCard, slotIndex: 0 | 1) {
 
     // ---- Проверка типа колонки под слот ----
     if (
-      card.vizId === "histogram" &&
+      (card.vizId === "histogram" ||
+        card.vizId === "histogram-buckets" ||
+        card.vizId === "barchart" ||
+        card.vizId === "barchart-buckets") &&
       slotIndex === 0 &&
       ct.type !== "numeric"
     ) {
       reject();
       return;
     }
-    if (card.vizId === "barchart") {
-      if (slotIndex === 0 && ct.type === "numeric") {
+
+    if (card.vizId === "histogram-grouped" || card.vizId === "barchart-grouped") {
+      if (slotIndex === 0 && ct.type !== "numeric") {
         reject();
         return;
       }
-      if (slotIndex === 1 && ct.type !== "numeric") {
+      if (slotIndex === 1 && ct.type !== "string" && ct.type !== "mixed") {
         reject();
         return;
       }
@@ -2666,7 +3356,7 @@ function setupDropzone(dropzone: HTMLElement, card: VizCard, slotIndex: 0 | 1) {
       return;
     }
 
-        card.settings.slots[slotIndex] = {
+    card.settings.slots[slotIndex] = {
       columnIndex: idx,
       name: ct.name,
       legendText: ct.name,
@@ -2687,43 +3377,391 @@ function syncCardVisual(card: VizCard) {
 
   if (card.vizId === "histogram" && slot0 && currentData) {
     stopBarChartForCard(card.id);
+    stopBucketedBarChartForCard(card.id);
     runHistogramForCard(card);
     return;
   }
+  if (card.vizId === "histogram-buckets" && currentData) {
+    stopBarChartForCard(card.id);
+    stopBucketedBarChartForCard(card.id);
+    runBucketedHistogramForCard(card);
+    return;
+  }
 
+  if (card.vizId === "histogram-grouped" && currentData) {
+    stopBarChartForCard(card.id);
+    stopBucketedBarChartForCard(card.id);
+    stopBucketedHistogramForCard(card.id);
+    stopGroupedBarChartForCard(card.id);
+    runGroupedHistogramForCard(card);
+    return;
+  }
+
+  if (card.vizId === "barchart-grouped" && currentData) {
+    stopHistogramForCard(card.id);
+    stopBarChartForCard(card.id);
+    stopBucketedBarChartForCard(card.id);
+    stopBucketedHistogramForCard(card.id);
+    runGroupedBarChartForCard(card);
+    return;
+  }
   if (card.vizId === "barchart" && slot0 && currentData) {
     stopHistogramForCard(card.id);
+    stopBucketedBarChartForCard(card.id);
     runBarChartForCard(card);
+    return;
+  }
+
+  if (card.vizId === "barchart-buckets" && currentData) {
+    stopHistogramForCard(card.id);
+    runBucketedBarChartForCard(card);
     return;
   }
 
   stopHistogramForCard(card.id);
   stopBarChartForCard(card.id);
+  stopBucketedBarChartForCard(card.id);
   refreshCardBody(card);
 }
 
 function redrawActive(card: VizCard) {
+  const groupedBar = runningGroupedBars.get(card.id);
+  if (groupedBar) {
+    groupedBar.redraw();
+    return;
+  }
+  const grouped = runningGroupedHistograms.get(card.id);
+  if (grouped) {
+    grouped.redraw();
+    return;
+  }
+  const bucketedBar = runningBucketedBars.get(card.id);
+  if (bucketedBar) {
+    bucketedBar.redraw();
+    return;
+  }
+  const bucketed = runningBucketedHistograms.get(card.id);
+  if (bucketed) {
+    bucketed.redraw();
+    return;
+  }
   const hist = runningHistograms.get(card.id);
   if (hist) {
-    hist.renderer.draw(hist.lastState, {
-      xLabel: hist.getXLabel(),
-      yLabel: hist.getYLabel(),
-      showGrid: card.settings.showGrid,
-      showAxisLabels: card.settings.showAxisLabels,
-      placeholder: "Готовим первую порцию…",
-    });
+    hist.redraw();
     return;
   }
   const bar = runningBars.get(card.id);
   if (bar) {
-    bar.renderer.draw(bar.lastData, {
-      xLabel: bar.getXLabel(),
-      yLabel: bar.getYLabel(),
-      topN: card.settings.topN > 0 ? card.settings.topN : undefined,
-    });
+    bar.redraw();
     return;
   }
   refreshCardBody(card);
+}
+
+// ============================================================
+// ГИСТОГРАММА С ДИАПАЗОНАМИ
+// ============================================================
+
+interface BucketedHistogramRun {
+  handle: BucketedHistogramHandle;
+  canvas: HTMLCanvasElement;
+  renderer: HistogramRenderer;
+  lastState: BucketedHistogramChunkResult | null;
+  observer: ResizeObserver;
+  getXLabel: () => string;
+  getYLabel: () => string;
+  getLegendText: () => string;
+  getBucketLabels: () => string[];
+  tooltip: HTMLDivElement;
+  onMove: (e: MouseEvent) => void;
+  onLeave: () => void;
+  extractionStats: ExtractionStats;
+  issuesBadge: HTMLElement | null;
+  redraw: () => void;
+}
+
+const runningBucketedHistograms = new Map<string, BucketedHistogramRun>();
+
+function opToCode(op: BucketOperator): number {
+  switch (op) {
+    case "lt": return 0;
+    case "lte": return 1;
+    case "gt": return 2;
+    case "gte": return 3;
+    case "eq": return 4;
+    case "neq": return 5;
+    case "range": return 6;
+  }
+}
+
+function getBucketLabel(b: Bucket, showName: boolean): string {
+  if (showName && b.name.trim()) return b.name.trim();
+  return formatBucketCondition(b);
+}
+
+/** Обёртка вокруг BucketedHistogramChunkResult — рисуем через HistogramRenderer. */
+function toHistogramState(
+  state: BucketedHistogramChunkResult,
+): HistogramChunkResult {
+  return {
+    processed: state.processed,
+    total: state.total,
+    bins: state.buckets,
+    counts: state.counts,
+    min: 0,
+    max: state.buckets,
+    underflow: 0,
+    overflow: state.outOfBuckets,
+    done: state.done,
+  };
+}
+
+function runBucketedHistogramForCard(card: VizCard) {
+  stopBucketedHistogramForCard(card.id);
+  stopHistogramForCard(card.id);
+  stopBarChartForCard(card.id);
+
+  const el = document.getElementById(card.id);
+  const body = el?.querySelector(".viz-card-body") as HTMLElement | null;
+  if (!body) return;
+
+  if (!currentData) return;
+  const slot = card.settings.slots[0];
+  if (!slot) {
+    body.innerHTML = `
+      <div class="viz-stub">
+        <div class="viz-stub-title">Выберите колонку</div>
+        <div class="viz-stub-sub">Перетащите числовую колонку в блок «Данные» справа</div>
+      </div>
+    `;
+    return;
+  }
+
+  const t0 = performance.now();
+  const { values: data, stats } = extractNumericColumn(
+    currentData,
+    slot.columnIndex,
+  );
+
+  const buckets = card.settings.buckets;
+  if (data.length === 0 || buckets.length === 0) return;
+
+  const nB = buckets.length;
+  const ops = new Int32Array(nB);
+  const v1s = new Float64Array(nB);
+  const v2s = new Float64Array(nB);
+
+  for (let i = 0; i < nB; ++i) {
+    const b = buckets[i];
+    const valid =
+      b.value1 != null && (b.operator !== "range" || b.value2 != null);
+    if (!valid) {
+      ops[i] = -1;
+      continue;
+    }
+    ops[i] = opToCode(b.operator);
+    v1s[i] = b.value1!;
+    v2s[i] = b.operator === "range" ? b.value2! : 0;
+  }
+
+  // ---- Canvas ----
+  body.innerHTML = '<canvas class="viz-canvas-2d"></canvas>';
+  const canvas = body.querySelector("canvas") as HTMLCanvasElement;
+  const renderer = new HistogramRenderer(canvas);
+
+  const resizeCanvas = () => {
+    const r = body.getBoundingClientRect();
+    renderer.resize(r.width - 16, r.height - 16);
+  };
+  resizeCanvas();
+
+  const getXLabel = () => {
+    if (!card.settings.showAxisLabels) return "";
+    return slot.legendText.trim();
+  };
+  const getYLabel = () => {
+    if (!card.settings.showAxisLabels) return "";
+    return card.settings.yLabelOverride.trim();
+  };
+  const getLegendText = () => {
+    if (!card.settings.showLegend) return "";
+    return card.settings.legendText.trim() || slot.name;
+  };
+  const getBucketLabels = (): string[] => {
+    return card.settings.buckets.map((b) =>
+      getBucketLabel(b, card.settings.bucketsShowName),
+    );
+  };
+
+  const redraw = () => {
+    const run = runningBucketedHistograms.get(card.id);
+    const state = run?.lastState ?? null;
+    const labels = getBucketLabels();
+
+    if (!state) {
+      renderer.draw(null, {
+        xLabel: getXLabel(),
+        yLabel: getYLabel(),
+        legendText: getLegendText(),
+        showGrid: card.settings.showGrid,
+        showAxisLabels: card.settings.showAxisLabels,
+        precision: card.settings.precision,
+        binLabels: labels,
+        placeholder: "Готовим первую порцию…",
+      });
+      return;
+    }
+
+    renderer.draw(toHistogramState(state), {
+      xLabel: getXLabel(),
+      yLabel: getYLabel(),
+      legendText: getLegendText(),
+      showGrid: card.settings.showGrid,
+      showAxisLabels: card.settings.showAxisLabels,
+      binLabels: labels,
+      precision: card.settings.precision,
+    });
+  };
+
+  const observer = new ResizeObserver(() => {
+    resizeCanvas();
+    redraw();
+  });
+  observer.observe(body);
+
+  // ---------- Tooltip ----------
+  const tooltip = document.createElement("div");
+  tooltip.className = "viz-tooltip hidden";
+  document.body.appendChild(tooltip);
+
+  const onMove = (e: MouseEvent) => {
+    const rect = canvas.getBoundingClientRect();
+    const hit = renderer.hitTest(e.clientX - rect.left, e.clientY - rect.top);
+    if (!hit) {
+      tooltip.classList.add("hidden");
+      return;
+    }
+    const labels = getBucketLabels();
+    const label =
+      hit.binIndex >= 0 && hit.binIndex < labels.length
+        ? labels[hit.binIndex]
+        : "—";
+    tooltip.innerHTML = `
+      <div class="viz-tooltip-title">группа</div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">название</span>
+        <span class="viz-tooltip-value">${escapeHtml(label)}</span>
+      </div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">кол-во</span>
+        <span class="viz-tooltip-value">${hit.count.toLocaleString("ru-RU")}</span>
+      </div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">доля</span>
+        <span class="viz-tooltip-value">${(hit.frequency * 100).toFixed(2)}%</span>
+      </div>
+    `;
+    tooltip.style.left = `${e.clientX}px`;
+    tooltip.style.top = `${e.clientY}px`;
+    tooltip.classList.remove("hidden");
+  };
+
+  const onLeave = () => tooltip.classList.add("hidden");
+
+  canvas.addEventListener("mousemove", onMove);
+  canvas.addEventListener("mouseleave", onLeave);
+
+      // ---------- Значок проблемных строк ----------
+  const errorsCount = stats.nulls + stats.nans + stats.nonNumeric;
+  const issuesHandle = el ? createIssuesBadge(el, card.id) : null;
+  const issuesBadge: HTMLElement | null = issuesHandle?.el ?? null;
+
+  // Инициально — только ошибки (warnings появятся по мере обработки)
+  issuesHandle?.update(errorsCount, 0);
+
+  const run: BucketedHistogramRun = {
+    handle: { cancel: () => {} },
+    canvas,
+    renderer,
+    lastState: null,
+    observer,
+    getXLabel,
+    getYLabel,
+    getLegendText,
+    getBucketLabels,
+    tooltip,
+    onMove,
+    onLeave,
+    extractionStats: stats,
+    issuesBadge,
+    redraw,
+  };
+  runningBucketedHistograms.set(card.id, run);
+
+  redraw();
+  registerProgressRun(card.id, data.length);
+
+  console.group(
+    `%c[Bucketed histogram ${card.id}] колонка «${slot.name}»`,
+    "color:#4a9eff;font-weight:bold",
+  );
+  console.log(`Групп: ${nB}`);
+  console.log(`Числовых значений: ${data.length.toLocaleString("ru-RU")}`);
+  console.groupEnd();
+
+  const handle = runProgressiveBucketedHistogram({
+    data,
+    ops,
+    v1s,
+    v2s,
+    numBuckets: nB,
+        onProgress: (state) => {
+      run.lastState = state;
+      updateProgressRun(card.id, state.processed, state.total);
+            issuesHandle?.update(errorsCount, state.outOfBuckets);
+      redraw();
+    },
+    onDone: (state) => {
+      run.lastState = state;
+      finishProgressRun(card.id);
+            issuesHandle?.update(errorsCount, state.outOfBuckets);
+      redraw();
+
+      const sum = state.counts.reduce((a, b) => a + b, 0);
+      const elapsed = Math.round(performance.now() - t0);
+      console.group(
+        `%c[Bucketed histogram ${card.id}] готово за ${elapsed} мс`,
+        "color:#16a34a;font-weight:bold",
+      );
+      console.log(`Обработано: ${state.total.toLocaleString("ru-RU")}`);
+      console.log(`Сумма по группам: ${sum.toLocaleString("ru-RU")}`);
+      console.log(`Вне групп: ${state.outOfBuckets.toLocaleString("ru-RU")}`);
+      console.groupEnd();
+    },
+  });
+
+  run.handle = handle;
+}
+
+function stopBucketedHistogramForCard(cardId: string) {
+  const run = runningBucketedHistograms.get(cardId);
+  if (!run) return;
+  run.handle.cancel();
+  run.observer.disconnect();
+  run.canvas.removeEventListener("mousemove", run.onMove);
+  run.canvas.removeEventListener("mouseleave", run.onLeave);
+  run.tooltip.remove();
+  if (run.issuesBadge) run.issuesBadge.remove();
+  runningBucketedHistograms.delete(cardId);
+  unregisterProgressRun(cardId);
+}
+
+function pluralizeBuckets(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return "группа";
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return "группы";
+  return "групп";
 }
 
 // ============================================================
@@ -2745,6 +3783,277 @@ interface ExtractionStats {
   badRows: BadRow[];
 }
 
+// ============================================================
+// ЛИНЕЙЧАТАЯ С ДИАПАЗОНАМИ
+// ============================================================
+
+interface BucketedBarChartRun {
+  handle: BucketedHistogramHandle;
+  canvas: HTMLCanvasElement;
+  renderer: BarChartRenderer;
+  lastState: BucketedHistogramChunkResult | null;
+  observer: ResizeObserver;
+  getXLabel: () => string;
+  getYLabel: () => string;
+  getLegendText: () => string;
+  getBucketLabels: () => string[];
+  tooltip: HTMLDivElement;
+  onMove: (e: MouseEvent) => void;
+  onLeave: () => void;
+  extractionStats: ExtractionStats;
+  issuesBadge: HTMLElement | null;
+  redraw: () => void;
+}
+
+const runningBucketedBars = new Map<string, BucketedBarChartRun>();
+
+function runBucketedBarChartForCard(card: VizCard) {
+  stopBucketedBarChartForCard(card.id);
+  stopHistogramForCard(card.id);
+  stopBarChartForCard(card.id);
+  stopBucketedHistogramForCard(card.id);
+
+  const el = document.getElementById(card.id);
+  const body = el?.querySelector(".viz-card-body") as HTMLElement | null;
+  if (!body) return;
+
+  if (!currentData) return;
+  const slot = card.settings.slots[0];
+  if (!slot) {
+    body.innerHTML = `
+      <div class="viz-stub">
+        <div class="viz-stub-title">Выберите колонку</div>
+        <div class="viz-stub-sub">Перетащите числовую колонку в блок «Данные» справа</div>
+      </div>
+    `;
+    return;
+  }
+
+  const t0 = performance.now();
+  const { values: data, stats } = extractNumericColumn(
+    currentData,
+    slot.columnIndex,
+  );
+
+  const buckets = card.settings.buckets;
+  if (data.length === 0 || buckets.length === 0) return;
+
+  const nB = buckets.length;
+  const ops = new Int32Array(nB);
+  const v1s = new Float64Array(nB);
+  const v2s = new Float64Array(nB);
+
+  for (let i = 0; i < nB; ++i) {
+    const b = buckets[i];
+    const valid =
+      b.value1 != null && (b.operator !== "range" || b.value2 != null);
+    if (!valid) {
+      ops[i] = -1;
+      continue;
+    }
+    ops[i] = opToCode(b.operator);
+    v1s[i] = b.value1!;
+    v2s[i] = b.operator === "range" ? b.value2! : 0;
+  }
+
+  // ---- Canvas ----
+  body.innerHTML = '<canvas class="viz-canvas-2d"></canvas>';
+  const canvas = body.querySelector("canvas") as HTMLCanvasElement;
+  const renderer = new BarChartRenderer(canvas);
+
+  const resizeCanvas = () => {
+    const r = body.getBoundingClientRect();
+    renderer.resize(r.width - 16, r.height - 16);
+  };
+  resizeCanvas();
+
+  // Для bar chart: ось X — частоты (yLabelOverride),
+  // ось Y — значения (legendText слота).
+  const getXLabel = () => {
+    if (!card.settings.showAxisLabels) return "";
+    return card.settings.yLabelOverride.trim();
+  };
+  const getYLabel = () => {
+    if (!card.settings.showAxisLabels) return "";
+    return (slot.legendText || slot.name).trim();
+  };
+  const getLegendText = () => {
+    if (!card.settings.showLegend) return "";
+    return card.settings.legendText.trim() || slot.name;
+  };
+  const getBucketLabels = (): string[] => {
+    return card.settings.buckets.map((b) =>
+      getBucketLabel(b, card.settings.bucketsShowName),
+    );
+  };
+
+  const redraw = () => {
+    const run = runningBucketedBars.get(card.id);
+    const state = run?.lastState ?? null;
+    const labels = getBucketLabels();
+
+    if (!state) {
+      renderer.draw(null, {
+        xLabel: getXLabel(),
+        yLabel: getYLabel(),
+        legendText: getLegendText(),
+        showGrid: card.settings.showGrid,
+        showAxisLabels: card.settings.showAxisLabels,
+        preserveOrder: true,
+        precision: card.settings.precision,
+        placeholder: "Готовим первую порцию…",
+      });
+      return;
+    }
+
+    const categories: BarChartCategory[] = labels.map((label, i) => ({
+      label,
+      value: state.counts[i] ?? 0,
+    }));
+
+    renderer.draw(
+      { categories, metricLabel: "Частота" },
+      {
+        xLabel: getXLabel(),
+        yLabel: getYLabel(),
+        legendText: getLegendText(),
+        showGrid: card.settings.showGrid,
+        showAxisLabels: card.settings.showAxisLabels,
+        preserveOrder: true,
+        precision: card.settings.precision,
+        processed: state.processed,
+        total: state.total,
+        outOfBuckets: state.outOfBuckets,
+      },
+    );
+  };
+
+  const observer = new ResizeObserver(() => {
+    resizeCanvas();
+    redraw();
+  });
+  observer.observe(body);
+
+  // ---------- Tooltip ----------
+  const tooltip = document.createElement("div");
+  tooltip.className = "viz-tooltip hidden";
+  document.body.appendChild(tooltip);
+
+  const onMove = (e: MouseEvent) => {
+    const rect = canvas.getBoundingClientRect();
+    const hit = renderer.hitTest(e.clientX - rect.left, e.clientY - rect.top);
+    if (!hit) {
+      tooltip.classList.add("hidden");
+      return;
+    }
+    tooltip.innerHTML = `
+      <div class="viz-tooltip-title">группа</div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">название</span>
+        <span class="viz-tooltip-value">${escapeHtml(hit.label)}</span>
+      </div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">кол-во</span>
+        <span class="viz-tooltip-value">${hit.value.toLocaleString("ru-RU")}</span>
+      </div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">доля</span>
+        <span class="viz-tooltip-value">${(hit.percentage * 100).toFixed(2)}%</span>
+      </div>
+    `;
+    tooltip.style.left = `${e.clientX}px`;
+    tooltip.style.top = `${e.clientY}px`;
+    tooltip.classList.remove("hidden");
+  };
+
+  const onLeave = () => tooltip.classList.add("hidden");
+
+  canvas.addEventListener("mousemove", onMove);
+  canvas.addEventListener("mouseleave", onLeave);
+
+  // ---------- Значок проблемных строк ----------
+  const errorsCount = stats.nulls + stats.nans + stats.nonNumeric;
+  const issuesHandle = el ? createIssuesBadge(el, card.id) : null;
+  const issuesBadge: HTMLElement | null = issuesHandle?.el ?? null;
+  issuesHandle?.update(errorsCount, 0);
+
+  const run: BucketedBarChartRun = {
+    handle: { cancel: () => {} },
+    canvas,
+    renderer,
+    lastState: null,
+    observer,
+    getXLabel,
+    getYLabel,
+    getLegendText,
+    getBucketLabels,
+    tooltip,
+    onMove,
+    onLeave,
+    extractionStats: stats,
+    issuesBadge,
+    redraw,
+  };
+  runningBucketedBars.set(card.id, run);
+
+  redraw();
+  registerProgressRun(card.id, data.length);
+
+  console.group(
+    `%c[Bucketed bar ${card.id}] колонка «${slot.name}»`,
+    "color:#4a9eff;font-weight:bold",
+  );
+  console.log(`Групп: ${nB}`);
+  console.log(`Числовых значений: ${data.length.toLocaleString("ru-RU")}`);
+  console.groupEnd();
+
+  const handle = runProgressiveBucketedHistogram({
+    data,
+    ops,
+    v1s,
+    v2s,
+    numBuckets: nB,
+    onProgress: (state) => {
+      run.lastState = state;
+      updateProgressRun(card.id, state.processed, state.total);
+      issuesHandle?.update(errorsCount, state.outOfBuckets);
+      redraw();
+    },
+    onDone: (state) => {
+      run.lastState = state;
+      finishProgressRun(card.id);
+      issuesHandle?.update(errorsCount, state.outOfBuckets);
+      redraw();
+
+      const sum = state.counts.reduce((a, b) => a + b, 0);
+      const elapsed = Math.round(performance.now() - t0);
+      console.group(
+        `%c[Bucketed bar ${card.id}] готово за ${elapsed} мс`,
+        "color:#16a34a;font-weight:bold",
+      );
+      console.log(`Обработано: ${state.total.toLocaleString("ru-RU")}`);
+      console.log(`Сумма по группам: ${sum.toLocaleString("ru-RU")}`);
+      console.log(`Вне групп: ${state.outOfBuckets.toLocaleString("ru-RU")}`);
+      console.groupEnd();
+    },
+  });
+
+  run.handle = handle;
+}
+
+function stopBucketedBarChartForCard(cardId: string) {
+  const run = runningBucketedBars.get(cardId);
+  if (!run) return;
+  run.handle.cancel();
+  run.observer.disconnect();
+  run.canvas.removeEventListener("mousemove", run.onMove);
+  run.canvas.removeEventListener("mouseleave", run.onLeave);
+  run.tooltip.remove();
+  if (run.issuesBadge) run.issuesBadge.remove();
+  runningBucketedBars.delete(cardId);
+  unregisterProgressRun(cardId);
+}
+
 interface HistogramRun {
   handle: HistogramHandle;
   canvas: HTMLCanvasElement;
@@ -2758,6 +4067,8 @@ interface HistogramRun {
   onLeave: () => void;
   extractionStats: ExtractionStats;
   issuesBadge: HTMLElement | null;
+  /** Перерисовка с текущими настройками (включая top-N). */
+  redraw: () => void;
 }
 
 const runningHistograms = new Map<string, HistogramRun>();
@@ -2847,6 +4158,83 @@ function extractNumericColumn(
   return { values: tmp.slice(0, n), stats };
 }
 
+// ============================================================
+// ЗНАЧОК ПРОБЛЕМНЫХ СТРОК (общий для всех визуализаций)
+// ============================================================
+
+interface IssuesBadgeHandle {
+  el: HTMLElement;
+  update: (errors: number, warnings: number) => void;
+}
+
+function createIssuesBadge(
+  cardEl: HTMLElement,
+  cardId: string,
+): IssuesBadgeHandle | null {
+  const header = cardEl.querySelector(".viz-card-header");
+  const closeBtn = header?.querySelector(".viz-card-close");
+  if (!header || !closeBtn) return null;
+
+  const badge = document.createElement("div");
+  badge.className = "viz-card-issues-badge hidden";
+  badge.title = "Проблемные строки — нажмите, чтобы посмотреть";
+  badge.innerHTML = `
+    <span class="issues-part errors hidden">
+      <span class="issues-triangle errors">⚠</span>
+      <span class="issues-count" data-errors-count>0</span>
+    </span>
+    <span class="issues-part warnings hidden">
+      <span class="issues-triangle warnings">⚠</span>
+      <span class="issues-count" data-warnings-count>0</span>
+    </span>
+  `;
+  badge.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openBadRowsModal(cardId);
+  });
+  badge.addEventListener("dblclick", (e) => e.stopPropagation());
+
+  header.insertBefore(badge, closeBtn);
+
+  const errorsPart = badge.querySelector(
+    ".issues-part.errors",
+  ) as HTMLElement;
+  const warningsPart = badge.querySelector(
+    ".issues-part.warnings",
+  ) as HTMLElement;
+  const errorsCountEl = badge.querySelector(
+    "[data-errors-count]",
+  ) as HTMLElement;
+  const warningsCountEl = badge.querySelector(
+    "[data-warnings-count]",
+  ) as HTMLElement;
+
+  return {
+    el: badge,
+    update(errors: number, warnings: number) {
+      if (errors === 0 && warnings === 0) {
+        badge.classList.add("hidden");
+        return;
+      }
+      badge.classList.remove("hidden");
+
+      if (errors > 0) {
+        errorsPart.classList.remove("hidden");
+        errorsCountEl.textContent = errors.toLocaleString("ru-RU");
+      } else {
+        errorsPart.classList.add("hidden");
+      }
+
+      if (warnings > 0) {
+        warningsPart.classList.remove("hidden");
+        warningsCountEl.textContent = warnings.toLocaleString("ru-RU");
+      } else {
+        warningsPart.classList.add("hidden");
+      }
+    },
+  };
+}
+
 function runHistogramForCard(card: VizCard) {
   stopHistogramForCard(card.id);
 
@@ -2860,36 +4248,12 @@ function runHistogramForCard(card: VizCard) {
     slot.columnIndex,
   );
 
-  // ---- Значок об исключённых строках ----
-  const totalIssues = stats.nulls + stats.nans + stats.nonNumeric;
-  const realErrors = stats.nans + stats.nonNumeric;
-
-  // ---- Лог: что и откуда берём ----
-  console.group(
-    `%c[Гистограмма ${card.id}] колонка «${slot.name}»`,
-    "color:#4a9eff;font-weight:bold",
-  );
-  console.log(
-    `Строк в датасете:    ${stats.totalRows.toLocaleString("ru-RU")}`,
-  );
-  console.log(`Числовых значений:   ${stats.valid.toLocaleString("ru-RU")}`);
-  if (stats.nulls > 0)
-    console.log(`  · пустые (null):   ${stats.nulls.toLocaleString("ru-RU")}`);
-  if (stats.nans > 0)
-    console.log(`  · NaN / Inf:       ${stats.nans.toLocaleString("ru-RU")}`);
-  if (stats.nonNumeric > 0)
-    console.log(
-      `  · не число:        ${stats.nonNumeric.toLocaleString("ru-RU")}`,
-    );
-
   if (data.length === 0) {
     console.warn(
-      `Нет ни одного числового значения — визуализация не запускается`,
+      `[Гистограмма ${card.id}] нет числовых значений в колонке «${slot.name}»`,
     );
-    console.groupEnd();
     return;
   }
-  console.groupEnd();
 
   const el = document.getElementById(card.id);
   const body = el?.querySelector(".viz-card-body") as HTMLElement | null;
@@ -2907,28 +4271,94 @@ function runHistogramForCard(card: VizCard) {
 
   const getXLabel = () => {
     const s = card.settings.slots[0];
-    if (!s || !card.settings.showLegend) return "";
+    if (!s || !card.settings.showAxisLabels) return "";
     return s.legendText.trim();
   };
   const getYLabel = () => {
-    if (!card.settings.showLegend) return "";
+    if (!card.settings.showAxisLabels) return "";
     return card.settings.yLabelOverride.trim();
   };
+  const getLegendText = () => {
+    if (!card.settings.showLegend) return "";
+    const s = card.settings.slots[0];
+    if (!s) return "";
+    return card.settings.legendText.trim() || s.name;
+  };
 
-  const redraw = (state: HistogramChunkResult | null) => {
-    renderer.draw(state, {
+  // Актуальные метки для tooltip (закрытие — чтобы tooltip видел их свежими)
+  let currentLabels: string[] = [];
+
+  const applyTopN = (
+    state: HistogramChunkResult,
+  ): { filtered: HistogramChunkResult; labels: string[] } => {
+    const topN = card.settings.topN;
+    const totalBins = state.counts.length;
+    if (totalBins === 0) return { filtered: state, labels: [] };
+
+    const binWidth = (state.max - state.min) / totalBins;
+    const prec = card.settings.precision;
+
+    const allLabels: string[] = [];
+    for (let i = 0; i < totalBins; ++i) {
+      const lo = state.min + i * binWidth;
+      const hi = lo + binWidth;
+      allLabels.push(
+        `${formatNumberPrecise(lo, prec)}–${formatNumberPrecise(hi, prec)}`,
+      );
+    }
+
+    if (topN <= 0 || topN >= totalBins) {
+      return { filtered: state, labels: allLabels };
+    }
+
+    const indexed = state.counts.map((c, i) => ({ c, i }));
+    indexed.sort((a, b) => b.c - a.c);
+    const topSet = new Set(indexed.slice(0, topN).map((x) => x.i));
+    const keptIdx = Array.from(topSet).sort((a, b) => a - b);
+
+    const newCounts = keptIdx.map((i) => state.counts[i]);
+    const newLabels = keptIdx.map((i) => allLabels[i]);
+
+    return {
+      filtered: { ...state, counts: newCounts, bins: newCounts.length },
+      labels: newLabels,
+    };
+  };
+
+  const redraw = () => {
+    const run = runningHistograms.get(card.id);
+    const state = run?.lastState ?? null;
+
+    if (!state) {
+      currentLabels = [];
+      renderer.draw(null, {
+        xLabel: getXLabel(),
+        yLabel: getYLabel(),
+        legendText: getLegendText(),
+        showGrid: card.settings.showGrid,
+        showAxisLabels: card.settings.showAxisLabels,
+        precision: card.settings.precision,
+        placeholder: "Готовим первую порцию…",
+      });
+      return;
+    }
+
+    const { filtered, labels } = applyTopN(state);
+    currentLabels = labels;
+    renderer.draw(filtered, {
       xLabel: getXLabel(),
       yLabel: getYLabel(),
+      legendText: getLegendText(),
       showGrid: card.settings.showGrid,
       showAxisLabels: card.settings.showAxisLabels,
-      placeholder: "Готовим первую порцию…",
+      binLabels: labels,
+      precision: card.settings.precision,
     });
   };
 
   const observer = new ResizeObserver(() => {
     resizeCanvas();
-    const run = runningHistograms.get(card.id);
-    if (run) redraw(run.lastState);
+    redraw();
   });
   observer.observe(body);
 
@@ -2939,24 +4369,20 @@ function runHistogramForCard(card: VizCard) {
 
   const onMove = (e: MouseEvent) => {
     const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const hit = renderer.hitTest(x, y);
+    const hit = renderer.hitTest(e.clientX - rect.left, e.clientY - rect.top);
     if (!hit) {
       tooltip.classList.add("hidden");
       return;
     }
-    const w = hit.rangeEnd - hit.rangeStart;
-    const digits = w >= 10 ? 0 : w >= 1 ? 1 : 2;
+    const label =
+      hit.binIndex >= 0 && hit.binIndex < currentLabels.length
+        ? currentLabels[hit.binIndex]
+        : "—";
     tooltip.innerHTML = `
       <div class="viz-tooltip-title">диапазон</div>
       <div class="viz-tooltip-row">
-        <span class="viz-tooltip-label">от</span>
-        <span class="viz-tooltip-value">${hit.rangeStart.toFixed(digits)}</span>
-      </div>
-      <div class="viz-tooltip-row">
-        <span class="viz-tooltip-label">до</span>
-        <span class="viz-tooltip-value">${hit.rangeEnd.toFixed(digits)}</span>
+        <span class="viz-tooltip-label">значения</span>
+        <span class="viz-tooltip-value">${escapeHtml(label)}</span>
       </div>
       <div class="viz-tooltip-row">
         <span class="viz-tooltip-label">кол-во</span>
@@ -2972,35 +4398,16 @@ function runHistogramForCard(card: VizCard) {
     tooltip.classList.remove("hidden");
   };
 
-  const onLeave = () => {
-    tooltip.classList.add("hidden");
-  };
+  const onLeave = () => tooltip.classList.add("hidden");
 
   canvas.addEventListener("mousemove", onMove);
   canvas.addEventListener("mouseleave", onLeave);
 
-  // ---- Значок, если были исключённые строки: в шапку карточки, после заголовка ----
-  let issuesBadge: HTMLElement | null = null;
-  if (totalIssues > 0 && el) {
-    issuesBadge = document.createElement("div");
-    issuesBadge.className =
-      "viz-card-issues-badge" + (realErrors > 0 ? " critical" : "");
-    issuesBadge.textContent = `⚠ ${totalIssues.toLocaleString("ru-RU")}`;
-    issuesBadge.title = "Исключённые строки — нажмите, чтобы посмотреть";
-    issuesBadge.addEventListener("click", (e) => {
-      e.stopPropagation();
-      openBadRowsModal(card.id);
-    });
-    issuesBadge.addEventListener("dblclick", (e) => e.stopPropagation());
-
-    const header = el.querySelector(".viz-card-header");
-    const closeBtn = header?.querySelector(".viz-card-close");
-    if (header && closeBtn) {
-      header.insertBefore(issuesBadge, closeBtn);
-    } else {
-      el.appendChild(issuesBadge); // fallback — на случай, если шапки нет
-    }
-  }
+    // ---------- Значок bad rows ----------
+  const errorsCount = stats.nulls + stats.nans + stats.nonNumeric;
+  const issuesHandle = el ? createIssuesBadge(el, card.id) : null;
+  issuesHandle?.update(errorsCount, 0);
+  const issuesBadge: HTMLElement | null = issuesHandle?.el ?? null;
 
   const run: HistogramRun = {
     handle: { cancel: () => {} },
@@ -3015,11 +4422,11 @@ function runHistogramForCard(card: VizCard) {
     onLeave,
     extractionStats: stats,
     issuesBadge,
+    redraw,
   };
   runningHistograms.set(card.id, run);
 
-  redraw(null);
-
+  redraw();
   registerProgressRun(card.id, data.length);
 
   const handle = runProgressiveHistogram({
@@ -3028,49 +4435,604 @@ function runHistogramForCard(card: VizCard) {
     onProgress: (state) => {
       run.lastState = state;
       updateProgressRun(card.id, state.processed, state.total);
-      redraw(state);
+      redraw();
     },
     onDone: (state) => {
       run.lastState = state;
       finishProgressRun(card.id);
-      redraw(state);
+      redraw();
 
-      // ---- Лог: что отобразилось ----
       const sum = state.counts.reduce((a, b) => a + b, 0);
-      const under = state.underflow;
-      const over = state.overflow;
       const elapsed = Math.round(performance.now() - t0);
-
       console.group(
         `%c[Гистограмма ${card.id}] готово за ${elapsed} мс`,
         "color:#16a34a;font-weight:bold",
       );
-      console.log(
-        `Обработано (C++):    ${state.total.toLocaleString("ru-RU")}`,
-      );
-      console.log(`Сумма по бинам:      ${sum.toLocaleString("ru-RU")}`);
-      console.log(`Underflow / Overflow: ${under} / ${over}`);
-
-      const lost = state.total - sum;
-      if (lost === 0 && under === 0 && over === 0) {
-        console.log(
-          `%c✓ Все значения отображены`,
-          "color:#16a34a;font-weight:bold",
-        );
-      } else {
-        console.warn(
-          `%c⚠ Не отображено: ${(lost + under + over).toLocaleString("ru-RU")}`,
-          "color:#dc2626;font-weight:bold",
-        );
-        if (lost > 0) console.warn(`   · разница total − sum: ${lost}`);
-        if (under > 0) console.warn(`   · underflow (v < min): ${under}`);
-        if (over > 0) console.warn(`   · overflow (v > max):  ${over}`);
-      }
+      console.log(`Обработано: ${state.total.toLocaleString("ru-RU")}`);
+      console.log(`Сумма по бинам: ${sum.toLocaleString("ru-RU")}`);
+      console.log(`Бинов всего: ${state.counts.length}`);
+      if (card.settings.topN > 0)
+        console.log(`Показано топ-${card.settings.topN}`);
       console.groupEnd();
     },
   });
 
   run.handle = handle;
+}
+
+// ============================================================
+// ГРУППИРОВАННАЯ ГИСТОГРАММА — ИНТЕГРАЦИЯ
+// ============================================================
+
+interface GroupedHistogramRun {
+  handle: GroupedHistogramHandle;
+  canvas: HTMLCanvasElement;
+  renderer: GroupedHistogramRenderer;
+  lastState: GroupedHistogramChunkResult | null;
+  observer: ResizeObserver;
+  getXLabel: () => string;
+  getYLabel: () => string;
+  getBinLabels: () => string[];
+  getSeriesNames: () => string[];
+  tooltip: HTMLDivElement;
+  onMove: (e: MouseEvent) => void;
+  onLeave: () => void;
+  extractionStats: ExtractionStats;
+  issuesBadge: HTMLElement | null;
+  redraw: () => void;
+}
+
+const runningGroupedHistograms = new Map<string, GroupedHistogramRun>();
+
+// ============================================================
+// ЛИНЕЙЧАТАЯ С НАКОПЛЕНИЕМ — ИНТЕГРАЦИЯ
+// ============================================================
+
+interface GroupedBarChartRun {
+  handle: GroupedHistogramHandle;
+  canvas: HTMLCanvasElement;
+  renderer: GroupedBarChartRenderer;
+  lastState: GroupedHistogramChunkResult | null;
+  observer: ResizeObserver;
+  getXLabel: () => string;
+  getYLabel: () => string;
+  getBinLabels: () => string[];
+  getSeriesNames: () => string[];
+  tooltip: HTMLDivElement;
+  onMove: (e: MouseEvent) => void;
+  onLeave: () => void;
+  extractionStats: ExtractionStats;
+  issuesBadge: HTMLElement | null;
+  redraw: () => void;
+}
+
+const runningGroupedBars = new Map<string, GroupedBarChartRun>();
+
+function runGroupedBarChartForCard(card: VizCard) {
+  stopGroupedBarChartForCard(card.id);
+
+  const el = document.getElementById(card.id);
+  const body = el?.querySelector(".viz-card-body") as HTMLElement | null;
+  if (!body) return;
+
+  if (!currentData) return;
+  const slotNum = card.settings.slots[0];
+  const slotCat = card.settings.slots[1];
+
+  if (!slotNum || !slotCat) {
+    body.innerHTML = `
+      <div class="viz-stub">
+        <div class="viz-stub-title">Выберите колонки</div>
+        <div class="viz-stub-sub">Перетащите числовую и категориальную колонки в настройки</div>
+      </div>
+    `;
+    return;
+  }
+
+  const buckets = card.settings.buckets;
+  if (buckets.length === 0) return;
+  const nB = buckets.length;
+
+  const rows = currentData.rows;
+  const tmpData = new Float64Array(rows.length);
+  const tmpCatStrings = new Array<string>(rows.length);
+  let n = 0;
+
+  const stats: ExtractionStats = {
+    totalRows: rows.length,
+    valid: 0,
+    nulls: 0,
+    nans: 0,
+    nonNumeric: 0,
+    badRows: [],
+  };
+  const pushBad = (rowNumber: number, reason: BadRow["reason"], rawValue: string) => {
+    if (stats.badRows.length < MAX_BAD_ROWS) {
+      stats.badRows.push({ rowNumber, reason, rawValue });
+    }
+  };
+
+  for (let i = 0; i < rows.length; ++i) {
+    const rawNum = rows[i][slotNum.columnIndex];
+    const rawCat = rows[i][slotCat.columnIndex];
+    const rowNumber = i + 1;
+
+    let num: number;
+    if (rawNum == null) { stats.nulls++; pushBad(rowNumber, "null", ""); continue; }
+    if (typeof rawNum === "number") {
+      if (!Number.isFinite(rawNum)) { stats.nans++; pushBad(rowNumber, "nan", String(rawNum)); continue; }
+      num = rawNum;
+    } else {
+      const s = String(rawNum).trim();
+      if (s === "") { stats.nulls++; pushBad(rowNumber, "null", ""); continue; }
+      const parsed = Number(s);
+      if (!Number.isFinite(parsed)) {
+        stats.nonNumeric++; pushBad(rowNumber, "nonNumeric", s); continue;
+      }
+      num = parsed;
+    }
+
+    if (rawCat == null) continue;
+    const catStr = String(rawCat).trim();
+    if (catStr === "") continue;
+
+    tmpData[n] = num;
+    tmpCatStrings[n] = catStr;
+    n++;
+    stats.valid++;
+  }
+
+  if (n === 0) return;
+
+  const finalData = tmpData.slice(0, n);
+  const catsList = tmpCatStrings.slice(0, n);
+
+  const catCounts = new Map<string, number>();
+  for (const c of catsList) catCounts.set(c, (catCounts.get(c) ?? 0) + 1);
+  const sortedCats = Array.from(catCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([name]) => name);
+
+  const topN = card.settings.topN;
+  const activeCats = topN > 0 ? sortedCats.slice(0, topN) : sortedCats;
+  const activeIdx = new Map(activeCats.map((name, idx) => [name, idx] as const));
+
+  const finalCatIndices = new Int32Array(n);
+  for (let i = 0; i < n; ++i) {
+    const idx = activeIdx.get(catsList[i]);
+    finalCatIndices[i] = idx === undefined ? -1 : idx;
+  }
+
+  if (activeCats.length === 0) return;
+
+  const ops = new Int32Array(nB);
+  const v1s = new Float64Array(nB);
+  const v2s = new Float64Array(nB);
+  for (let i = 0; i < nB; ++i) {
+    const b = buckets[i];
+    const valid =
+      b.value1 != null && (b.operator !== "range" || b.value2 != null);
+    if (!valid) { ops[i] = -1; continue; }
+    ops[i] = opToCode(b.operator);
+    v1s[i] = b.value1!;
+    v2s[i] = b.operator === "range" ? b.value2! : 0;
+  }
+
+  body.innerHTML = '<canvas class="viz-canvas-2d"></canvas>';
+  const canvas = body.querySelector("canvas") as HTMLCanvasElement;
+  const renderer = new GroupedBarChartRenderer(canvas);
+
+  const resizeCanvas = () => {
+    const r = body.getBoundingClientRect();
+    renderer.resize(r.width - 16, r.height - 16);
+  };
+  resizeCanvas();
+
+  // Для bar chart: ось X — частоты (yLabelOverride),
+  // ось Y — диапазоны (legendText слота 0).
+  const getXLabel = () =>
+    card.settings.showAxisLabels ? card.settings.yLabelOverride.trim() : "";
+  const getYLabel = () =>
+    card.settings.showAxisLabels ? (slotNum.legendText || slotNum.name).trim() : "";
+
+  const getBinLabels = (): string[] =>
+    card.settings.buckets.map((b) =>
+      getBucketLabel(b, card.settings.bucketsShowName),
+    );
+
+  // Имена серий нужны не только для легенды, но и для tooltip.
+  // Поэтому всегда возвращаем полный список, а видимость легенды
+  // контролируется отдельным флагом `showLegend` в draw-опциях.
+  const getSeriesNames = (): string[] => activeCats;
+
+  const redraw = () => {
+    const run = runningGroupedBars.get(card.id);
+    const state = run?.lastState ?? null;
+    renderer.draw(state, {
+      xLabel: getXLabel(),
+      yLabel: getYLabel(),
+      showGrid: card.settings.showGrid,
+      showAxisLabels: card.settings.showAxisLabels,
+      showLegend: card.settings.showLegend,
+      precision: card.settings.precision,
+      renderMode: card.settings.renderMode,
+      seriesNames: getSeriesNames(),
+      binLabels: getBinLabels(),
+      placeholder: "Готовим первую порцию…",
+    });
+  };
+
+  const observer = new ResizeObserver(() => {
+    resizeCanvas();
+    redraw();
+  });
+  observer.observe(body);
+
+  const errorsCount = stats.nulls + stats.nans + stats.nonNumeric;
+  const issuesHandle = el ? createIssuesBadge(el, card.id) : null;
+  issuesHandle?.update(errorsCount, 0);
+
+  const tooltip = document.createElement("div");
+  tooltip.className = "viz-tooltip hidden";
+  document.body.appendChild(tooltip);
+
+  const onMove = (e: MouseEvent) => {
+    const rect = canvas.getBoundingClientRect();
+    const hit = renderer.hitTest(e.clientX - rect.left, e.clientY - rect.top);
+    if (!hit) {
+      tooltip.classList.add("hidden");
+      return;
+    }
+    tooltip.innerHTML = `
+      <div class="viz-tooltip-title">сегмент</div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">диапазон</span>
+        <span class="viz-tooltip-value">${escapeHtml(hit.bucketLabel)}</span>
+      </div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">серия</span>
+        <span class="viz-tooltip-value">${escapeHtml(hit.seriesName)}</span>
+      </div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">кол-во</span>
+        <span class="viz-tooltip-value">${hit.value.toLocaleString("ru-RU")}</span>
+      </div>
+    `;
+    tooltip.style.left = `${e.clientX}px`;
+    tooltip.style.top = `${e.clientY}px`;
+    tooltip.classList.remove("hidden");
+  };
+
+  const onLeave = () => tooltip.classList.add("hidden");
+
+  canvas.addEventListener("mousemove", onMove);
+  canvas.addEventListener("mouseleave", onLeave);
+
+  const run: GroupedBarChartRun = {
+    handle: { cancel: () => {} },
+    canvas,
+    renderer,
+    lastState: null,
+    observer,
+    getXLabel,
+    getYLabel,
+    getBinLabels,
+    getSeriesNames,
+    tooltip,
+    onMove,
+    onLeave,
+    extractionStats: stats,
+    issuesBadge: issuesHandle?.el ?? null,
+    redraw,
+  };
+  runningGroupedBars.set(card.id, run);
+
+  redraw();
+  registerProgressRun(card.id, finalData.length);
+
+  const handle = runProgressiveGroupedHistogram({
+    data: finalData,
+    catIndices: finalCatIndices,
+    numCategories: activeCats.length,
+    ops,
+    v1s,
+    v2s,
+    numBuckets: nB,
+    onProgress: (state) => {
+      run.lastState = state;
+      updateProgressRun(card.id, state.processed, state.total);
+      issuesHandle?.update(errorsCount, state.outOfBuckets);
+      redraw();
+    },
+    onDone: (state) => {
+      run.lastState = state;
+      finishProgressRun(card.id);
+      issuesHandle?.update(errorsCount, state.outOfBuckets);
+      redraw();
+    },
+  });
+
+  run.handle = handle;
+}
+
+function stopGroupedBarChartForCard(cardId: string) {
+  const run = runningGroupedBars.get(cardId);
+  if (!run) return;
+  run.handle.cancel();
+  run.observer.disconnect();
+  run.canvas.removeEventListener("mousemove", run.onMove);
+  run.canvas.removeEventListener("mouseleave", run.onLeave);
+  run.tooltip.remove();
+  if (run.issuesBadge) run.issuesBadge.remove();
+  runningGroupedBars.delete(cardId);
+  unregisterProgressRun(cardId);
+}
+
+function runGroupedHistogramForCard(card: VizCard) {
+  stopGroupedHistogramForCard(card.id);
+
+  const el = document.getElementById(card.id);
+  const body = el?.querySelector(".viz-card-body") as HTMLElement | null;
+  if (!body) return;
+
+  if (!currentData) return;
+  const slotNum = card.settings.slots[0];
+  const slotCat = card.settings.slots[1];
+
+  if (!slotNum || !slotCat) {
+    body.innerHTML = `
+      <div class="viz-stub">
+        <div class="viz-stub-title">Выберите колонки</div>
+        <div class="viz-stub-sub">Перетащите числовую и категориальную колонки в настройки</div>
+      </div>
+    `;
+    return;
+  }
+
+  const buckets = card.settings.buckets;
+  if (buckets.length === 0) return;
+  const nB = buckets.length;
+
+  // Параллельно собираем числовые значения и категории — только те строки,
+  // где ОБА поля валидны. Это гарантирует, что data[i] ↔ cat[i].
+  const rows = currentData.rows;
+  const tmpData = new Float64Array(rows.length);
+  const tmpCatStrings = new Array<string>(rows.length);
+  let n = 0;
+
+  const stats: ExtractionStats = {
+    totalRows: rows.length,
+    valid: 0,
+    nulls: 0,
+    nans: 0,
+    nonNumeric: 0,
+    badRows: [],
+  };
+  const pushBad = (rowNumber: number, reason: BadRow["reason"], rawValue: string) => {
+    if (stats.badRows.length < MAX_BAD_ROWS) {
+      stats.badRows.push({ rowNumber, reason, rawValue });
+    }
+  };
+
+  for (let i = 0; i < rows.length; ++i) {
+    const rawNum = rows[i][slotNum.columnIndex];
+    const rawCat = rows[i][slotCat.columnIndex];
+    const rowNumber = i + 1;
+
+    // --- числовая колонка ---
+    let num: number;
+    if (rawNum == null) { stats.nulls++; pushBad(rowNumber, "null", ""); continue; }
+    if (typeof rawNum === "number") {
+      if (!Number.isFinite(rawNum)) { stats.nans++; pushBad(rowNumber, "nan", String(rawNum)); continue; }
+      num = rawNum;
+    } else {
+      const s = String(rawNum).trim();
+      if (s === "") { stats.nulls++; pushBad(rowNumber, "null", ""); continue; }
+      const parsed = Number(s);
+      if (!Number.isFinite(parsed)) {
+        stats.nonNumeric++; pushBad(rowNumber, "nonNumeric", s); continue;
+      }
+      num = parsed;
+    }
+
+    // --- категориальная колонка ---
+    if (rawCat == null) continue;
+    const catStr = String(rawCat).trim();
+    if (catStr === "") continue;
+
+    tmpData[n] = num;
+    tmpCatStrings[n] = catStr;
+    n++;
+    stats.valid++;
+  }
+
+  if (n === 0) return;
+
+  const finalData = tmpData.slice(0, n);
+  const catsList = tmpCatStrings.slice(0, n);
+
+  // Уникальные категории + частоты → сортировка по частоте убыв.
+  const catCounts = new Map<string, number>();
+  for (const c of catsList) {
+    catCounts.set(c, (catCounts.get(c) ?? 0) + 1);
+  }
+  const sortedCats = Array.from(catCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([name]) => name);
+
+  const topN = card.settings.topN;
+  const activeCats = topN > 0 ? sortedCats.slice(0, topN) : sortedCats;
+  const activeIdx = new Map(activeCats.map((name, idx) => [name, idx] as const));
+
+  const finalCatIndices = new Int32Array(n);
+  for (let i = 0; i < n; ++i) {
+    const idx = activeIdx.get(catsList[i]);
+    finalCatIndices[i] = idx === undefined ? -1 : idx;
+  }
+
+  if (activeCats.length === 0) return;
+
+  // --- ops, v1s, v2s из buckets ---
+  const ops = new Int32Array(nB);
+  const v1s = new Float64Array(nB);
+  const v2s = new Float64Array(nB);
+  for (let i = 0; i < nB; ++i) {
+    const b = buckets[i];
+    const valid =
+      b.value1 != null && (b.operator !== "range" || b.value2 != null);
+    if (!valid) { ops[i] = -1; continue; }
+    ops[i] = opToCode(b.operator);
+    v1s[i] = b.value1!;
+    v2s[i] = b.operator === "range" ? b.value2! : 0;
+  }
+
+  // Canvas
+  body.innerHTML = '<canvas class="viz-canvas-2d"></canvas>';
+  const canvas = body.querySelector("canvas") as HTMLCanvasElement;
+  const renderer = new GroupedHistogramRenderer(canvas);
+
+  const resizeCanvas = () => {
+    const r = body.getBoundingClientRect();
+    renderer.resize(r.width - 16, r.height - 16);
+  };
+  resizeCanvas();
+
+  const getXLabel = () => (card.settings.showAxisLabels ? slotNum.legendText.trim() : "");
+  const getYLabel = () => (card.settings.showAxisLabels ? card.settings.yLabelOverride.trim() : "");
+
+  const getBinLabels = (): string[] =>
+    card.settings.buckets.map((b) =>
+      getBucketLabel(b, card.settings.bucketsShowName),
+    );
+
+  // Имена серий нужны и для легенды, и для tooltip. Список всегда полный,
+  // видимость легенды — через флаг `showLegend`.
+  const getSeriesNames = (): string[] => activeCats;
+
+  const redraw = () => {
+    const run = runningGroupedHistograms.get(card.id);
+    const state = run?.lastState ?? null;
+    
+    renderer.draw(state, {
+      xLabel: getXLabel(),
+      yLabel: getYLabel(),
+      showGrid: card.settings.showGrid,
+      showAxisLabels: card.settings.showAxisLabels,
+      showLegend: card.settings.showLegend,
+      precision: card.settings.precision,
+      renderMode: card.settings.renderMode,
+      seriesNames: getSeriesNames(),
+      binLabels: getBinLabels(),
+      placeholder: "Готовим первую порцию…",
+    });
+  };
+
+  const observer = new ResizeObserver(() => {
+    resizeCanvas();
+    redraw();
+  });
+  observer.observe(body);
+
+  // ---------- Значок ошибок ----------
+  const errorsCount = stats.nulls + stats.nans + stats.nonNumeric;
+  const issuesHandle = el ? createIssuesBadge(el, card.id) : null;
+  issuesHandle?.update(errorsCount, 0);
+
+  // ---------- Tooltip ----------
+  const tooltip = document.createElement("div");
+  tooltip.className = "viz-tooltip hidden";
+  document.body.appendChild(tooltip);
+
+  const onMove = (e: MouseEvent) => {
+    const rect = canvas.getBoundingClientRect();
+    const hit = renderer.hitTest(e.clientX - rect.left, e.clientY - rect.top);
+    if (!hit) {
+      tooltip.classList.add("hidden");
+      return;
+    }
+    tooltip.innerHTML = `
+      <div class="viz-tooltip-title">сегмент</div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">диапазон</span>
+        <span class="viz-tooltip-value">${escapeHtml(hit.bucketLabel)}</span>
+      </div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">серия</span>
+        <span class="viz-tooltip-value">${escapeHtml(hit.seriesName)}</span>
+      </div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">кол-во</span>
+        <span class="viz-tooltip-value">${hit.value.toLocaleString("ru-RU")}</span>
+      </div>
+    `;
+    tooltip.style.left = `${e.clientX}px`;
+    tooltip.style.top = `${e.clientY}px`;
+    tooltip.classList.remove("hidden");
+  };
+
+  const onLeave = () => tooltip.classList.add("hidden");
+
+  canvas.addEventListener("mousemove", onMove);
+  canvas.addEventListener("mouseleave", onLeave);
+
+  const run: GroupedHistogramRun = {
+    handle: { cancel: () => {} },
+    canvas,
+    renderer,
+    lastState: null,
+    observer,
+    getXLabel,
+    getYLabel,
+    getBinLabels,
+    getSeriesNames,
+    tooltip,
+    onMove,
+    onLeave,
+    extractionStats: stats,
+    issuesBadge: issuesHandle?.el ?? null,
+    redraw,
+  };
+  runningGroupedHistograms.set(card.id, run);
+
+  redraw();
+  registerProgressRun(card.id, finalData.length);
+
+  const handle = runProgressiveGroupedHistogram({
+    data: finalData,
+    catIndices: finalCatIndices,
+    numCategories: activeCats.length,
+    ops,
+    v1s,
+    v2s,
+    numBuckets: nB,
+    onProgress: (state) => {
+      run.lastState = state;
+      updateProgressRun(card.id, state.processed, state.total);
+      issuesHandle?.update(errorsCount, state.outOfBuckets);
+      redraw();
+    },
+    onDone: (state) => {
+      run.lastState = state;
+      finishProgressRun(card.id);
+      issuesHandle?.update(errorsCount, state.outOfBuckets);
+      redraw();
+    },
+  });
+
+  run.handle = handle;
+}
+
+function stopGroupedHistogramForCard(cardId: string) {
+  const run = runningGroupedHistograms.get(cardId);
+  if (!run) return;
+  run.handle.cancel();
+  run.observer.disconnect();
+  run.canvas.removeEventListener("mousemove", run.onMove);
+  run.canvas.removeEventListener("mouseleave", run.onLeave);
+  run.tooltip.remove();
+  if (run.issuesBadge) run.issuesBadge.remove();
+  runningGroupedHistograms.delete(cardId);
+  unregisterProgressRun(cardId);
 }
 
 function stopHistogramForCard(cardId: string) {
@@ -3088,62 +5050,215 @@ function stopHistogramForCard(cardId: string) {
 
 // ---------- Модалка со списком исключённых строк ----------
 
+interface OutOfBucketRow {
+  rowNumber: number;
+  value: number;
+}
+
+const MAX_OUT_OF_BUCKET_ROWS = 500;
+
+/**
+ * Проходит по исходным строкам, определяет значения, не попавшие
+ * ни в одну группу, и возвращает счётчик и (ограниченный) список строк.
+ */
+function computeOutOfBucketsRows(card: VizCard): {
+  count: number;
+  rows: OutOfBucketRow[];
+} {
+  if (!currentData) return { count: 0, rows: [] };
+
+  const isGrouped =
+    card.vizId === "histogram-grouped" || card.vizId === "barchart-grouped";
+  if (
+    card.vizId !== "histogram-buckets" &&
+    card.vizId !== "barchart-buckets" &&
+    !isGrouped
+  ) {
+    return { count: 0, rows: [] };
+  }
+
+  const slot = card.settings.slots[0];
+  if (!slot) return { count: 0, rows: [] };
+
+  // Для grouped-гистограммы нужно также проверять валидность
+  // категориальной колонки: в WASM-ядре такие строки не считаются
+  // «out of buckets» — они вообще пропускаются.
+  const catSlot = isGrouped ? card.settings.slots[1] : null;
+  if (isGrouped && !catSlot) return { count: 0, rows: [] };
+  const catColIdx = catSlot?.columnIndex ?? -1;
+
+  const buckets = card.settings.buckets;
+  if (buckets.length === 0) return { count: 0, rows: [] };
+
+  const colIdx = slot.columnIndex;
+  const rows = currentData.rows;
+
+  let count = 0;
+  const outRows: OutOfBucketRow[] = [];
+
+  for (let i = 0; i < rows.length; ++i) {
+    // Для grouped — сначала проверяем категориальную колонку.
+    if (isGrouped) {
+      const cv = rows[i][catColIdx];
+      if (cv == null) continue;
+      const cs = String(cv).trim();
+      if (cs === "") continue;
+    }
+
+    const v = rows[i][colIdx];
+    if (v == null) continue;
+    const num = typeof v === "number" ? v : Number(v);
+    if (!Number.isFinite(num)) continue;
+
+    let matched = false;
+    for (const b of buckets) {
+      if (matchesBucket(num, b)) {
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      count++;
+      if (outRows.length < MAX_OUT_OF_BUCKET_ROWS) {
+        outRows.push({ rowNumber: i + 1, value: num });
+      }
+    }
+  }
+
+  return { count, rows: outRows };
+}
+
+function setActiveBadRowsTab(tab: "errors" | "warnings") {
+  badRowsModal
+    .querySelectorAll<HTMLButtonElement>(".bad-rows-tab")
+    .forEach((btn) => {
+      btn.classList.toggle("active", btn.getAttribute("data-tab") === tab);
+    });
+  badRowsModal
+    .querySelectorAll<HTMLElement>("[data-tab-content]")
+    .forEach((el) => {
+      el.classList.toggle(
+        "hidden",
+        el.getAttribute("data-tab-content") !== tab,
+      );
+    });
+}
+
+badRowsModal
+  .querySelectorAll<HTMLButtonElement>(".bad-rows-tab")
+  .forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const tab = btn.getAttribute("data-tab");
+      if (tab === "errors" || tab === "warnings") {
+        setActiveBadRowsTab(tab);
+      }
+    });
+  });
+
 badRowsCancel.addEventListener("click", closeBadRowsModal);
 
 function openBadRowsModal(cardId: string) {
-  const run = runningHistograms.get(cardId);
-  if (!run) return;
-  const stats = run.extractionStats;
+  const groupedBar = runningGroupedBars.get(cardId);
+  const grouped = runningGroupedHistograms.get(cardId);
+  const bucketedBar = runningBucketedBars.get(cardId);
+  const bucketed = runningBucketedHistograms.get(cardId);
+  const hist = runningHistograms.get(cardId);
+  const bar = runningBars.get(cardId);
+  const stats =
+    groupedBar?.extractionStats ??
+    grouped?.extractionStats ??
+    bucketedBar?.extractionStats ??
+    bucketed?.extractionStats ??
+    hist?.extractionStats ??
+    bar?.extractionStats;
+  if (!stats) return;
 
-  const totalIssues = stats.nulls + stats.nans + stats.nonNumeric;
-  if (totalIssues === 0) return;
+  const card = vizCards.find((c) => c.id === cardId);
+  if (!card) return;
 
-  const parts: string[] = [];
-  if (stats.nulls > 0)
-    parts.push(`пусто: ${stats.nulls.toLocaleString("ru-RU")}`);
-  if (stats.nans > 0)
-    parts.push(`NaN / Inf: ${stats.nans.toLocaleString("ru-RU")}`);
-  if (stats.nonNumeric > 0)
-    parts.push(`не число: ${stats.nonNumeric.toLocaleString("ru-RU")}`);
+  const totalErrors = stats.nulls + stats.nans + stats.nonNumeric;
 
-  badRowsText.innerHTML =
-    `Строк в датасете: <b>${stats.totalRows.toLocaleString("ru-RU")}</b>. ` +
-    `Учтено: <b>${stats.valid.toLocaleString("ru-RU")}</b>. ` +
-    `Исключено: <b>${totalIssues.toLocaleString("ru-RU")}</b> — ${parts.join(", ")}.`;
+  // Out-of-buckets считаем лениво для всех bucketed-визуализаций,
+  // включая grouped histogram.
+  const outInfo =
+    card.vizId === "histogram-buckets" ||
+    card.vizId === "barchart-buckets" ||
+    card.vizId === "histogram-grouped" ||
+    card.vizId === "barchart-grouped"
+      ? computeOutOfBucketsRows(card)
+      : { count: 0, rows: [] as OutOfBucketRow[] };
 
+  if (totalErrors === 0 && outInfo.count === 0) return;
+
+  // ---- Счётчики в табах ----
+  badRowsErrorsCount.textContent = String(totalErrors);
+  badRowsWarningsCount.textContent = String(outInfo.count);
+
+  // ---- Таб «Ошибки» ----
   const reasonLabel: Record<BadRow["reason"], string> = {
     null: "пусто",
     nan: "NaN / Inf",
     nonNumeric: "не число",
   };
-
   const renderLimit = 500;
-  const shown = stats.badRows.slice(0, renderLimit);
 
-  badRowsTbody.innerHTML = shown
-    .map(
-      (b) => `
-      <tr>
-        <td>${b.rowNumber.toLocaleString("ru-RU")}</td>
-        <td>${b.rawValue ? escapeHtml(b.rawValue) : "<пусто>"}</td>
-        <td><span class="bad-rows-reason ${b.reason}">${reasonLabel[b.reason]}</span></td>
-      </tr>
-    `,
-    )
-    .join("");
+  if (totalErrors === 0) {
+    badRowsErrorsTbody.innerHTML = `<tr><td colspan="3" class="bad-rows-more">Ошибок нет</td></tr>`;
+  } else {
+    const shown = stats.badRows.slice(0, renderLimit);
+    badRowsErrorsTbody.innerHTML = shown
+      .map(
+        (b) => `
+        <tr>
+          <td>${b.rowNumber.toLocaleString("ru-RU")}</td>
+          <td>${b.rawValue ? escapeHtml(b.rawValue) : "<пусто>"}</td>
+          <td><span class="bad-rows-reason ${b.reason}">${reasonLabel[b.reason]}</span></td>
+        </tr>
+      `,
+      )
+      .join("");
 
-  if (totalIssues > renderLimit) {
-    const row = document.createElement("tr");
-    row.innerHTML = `<td colspan="3" class="bad-rows-more">Показано ${renderLimit.toLocaleString("ru-RU")} из ${totalIssues.toLocaleString("ru-RU")}</td>`;
-    badRowsTbody.appendChild(row);
+    if (totalErrors > renderLimit) {
+      const row = document.createElement("tr");
+      row.innerHTML = `<td colspan="3" class="bad-rows-more">Показано ${renderLimit.toLocaleString("ru-RU")} из ${totalErrors.toLocaleString("ru-RU")}</td>`;
+      badRowsErrorsTbody.appendChild(row);
+    }
   }
 
+  // ---- Таб «Предупреждения» ----
+  if (outInfo.count === 0) {
+    badRowsWarningsTbody.innerHTML = `<tr><td colspan="3" class="bad-rows-more">Предупреждений нет</td></tr>`;
+  } else {
+    badRowsWarningsTbody.innerHTML = outInfo.rows
+      .map(
+        (r) => `
+        <tr>
+          <td>${r.rowNumber.toLocaleString("ru-RU")}</td>
+          <td>${escapeHtml(formatNumberRu(r.value))}</td>
+          <td><span class="bad-rows-reason warn">не попало ни в один диапазон</span></td>
+        </tr>
+      `,
+      )
+      .join("");
+
+    if (outInfo.count > outInfo.rows.length) {
+      const row = document.createElement("tr");
+      row.innerHTML = `<td colspan="3" class="bad-rows-more">Показано ${outInfo.rows.length.toLocaleString("ru-RU")} из ${outInfo.count.toLocaleString("ru-RU")}</td>`;
+      badRowsWarningsTbody.appendChild(row);
+    }
+  }
+
+  // ---- Активный таб по умолчанию ----
+  setActiveBadRowsTab(totalErrors > 0 ? "errors" : "warnings");
+
+  // ---- Открыть модалку ----
   const scrollbarWidth =
     window.innerWidth - document.documentElement.clientWidth;
   document.body.style.setProperty("--scrollbar-width", `${scrollbarWidth}px`);
   document.body.classList.add("modal-open");
   badRowsModal.classList.add("open");
 }
+
 
 function closeBadRowsModal() {
   badRowsModal.classList.remove("open");
@@ -3162,65 +5277,83 @@ document.addEventListener("keydown", (e) => {
 // ============================================================
 
 interface BarChartRun {
+  handle: BarChartHandle;
+  canvas: HTMLCanvasElement;
   renderer: BarChartRenderer;
   observer: ResizeObserver;
   lastData: BarChartData | null;
+  lastValues: number[] | null;
+  /** Сколько обработано на текущий момент (обновляется из onProgress). */
+  processed: number;
+  /** Сколько всего значений. */
+  total: number;
   getXLabel: () => string;
   getYLabel: () => string;
+  tooltip: HTMLDivElement;
+  onMove: (e: MouseEvent) => void;
+  onLeave: () => void;
+  extractionStats: ExtractionStats;
+  issuesBadge: HTMLElement | null;
+  /** Перерисовка с текущими настройками. */
+  redraw: () => void;
 }
 
 const runningBars = new Map<string, BarChartRun>();
-
-function aggregateBarChart(
-  data: ParsedData,
-  categoryIndex: number,
-  valueColumnIndex: number | null,
-): BarChartData {
-  const map = new Map<string, number>();
-  const rows = data.rows;
-
-  for (let i = 0; i < rows.length; ++i) {
-    const rawCat = rows[i][categoryIndex];
-    const key = rawCat == null ? "(пусто)" : String(rawCat);
-    const prev = map.get(key) ?? 0;
-
-    if (valueColumnIndex === null) {
-      map.set(key, prev + 1);
-    } else {
-      const raw = rows[i][valueColumnIndex];
-      if (raw == null) continue;
-      const num = typeof raw === "number" ? raw : Number(raw);
-      if (!Number.isFinite(num)) continue;
-      map.set(key, prev + num);
-    }
-  }
-
-  const categories: BarChartCategory[] = [];
-  for (const [label, value] of map.entries()) {
-    categories.push({ label, value });
-  }
-  categories.sort((a, b) => b.value - a.value);
-
-  const metricLabel =
-    valueColumnIndex === null
-      ? "Количество записей"
-      : (data.columnTypes[valueColumnIndex]?.name ?? "Значение");
-
-  return { categories, metricLabel };
-}
 
 function runBarChartForCard(card: VizCard) {
   stopBarChartForCard(card.id);
 
   if (!currentData) return;
-  const catSlot = card.settings.slots[0];
-  if (!catSlot) return;
+  const slot = card.settings.slots[0];
+  if (!slot) return;
 
-  const valSlot = card.settings.slots[1];
-  const valIdx = valSlot ? valSlot.columnIndex : null;
+  const t0 = performance.now();
+  const { values: nums, stats } = extractNumericColumn(
+    currentData,
+    slot.columnIndex,
+  );
 
-  const data = aggregateBarChart(currentData, catSlot.columnIndex, valIdx);
+  if (nums.length === 0) {
+    console.warn(
+      `[Bar chart ${card.id}] нет числовых значений в колонке «${slot.name}»`,
+    );
+    return;
+  }
 
+  // ---- Диапазон ----
+  let minV = Infinity;
+  let maxV = -Infinity;
+  for (let i = 0; i < nums.length; ++i) {
+    const v = nums[i];
+    if (v < minV) minV = v;
+    if (v > maxV) maxV = v;
+  }
+  if (!isFinite(minV) || !isFinite(maxV)) return;
+  if (maxV <= minV) maxV = minV + 1;
+
+  // ---- Бины ----
+  const bins = Math.max(1, card.settings.bins);
+  const binWidth = (maxV - minV) / bins;
+
+  const catIndices = new Int32Array(nums.length);
+  for (let i = 0; i < nums.length; ++i) {
+    let b = Math.floor((nums[i] - minV) / binWidth);
+    if (b < 0) b = 0;
+    if (b >= bins) b = bins - 1;
+    catIndices[i] = b;
+  }
+
+  console.group(
+    `%c[Bar chart ${card.id}] колонка «${slot.name}»`,
+    "color:#4a9eff;font-weight:bold",
+  );
+  console.log(`Числовых значений: ${stats.valid.toLocaleString("ru-RU")}`);
+  console.log(`Диапазон: [${formatNumberRu(minV)} … ${formatNumberRu(maxV)}]`);
+  console.log(`Бинов: ${bins}`);
+  if (card.settings.topN > 0) console.log(`Топ-N: ${card.settings.topN}`);
+  console.groupEnd();
+
+  // ---- Canvas ----
   const el = document.getElementById(card.id);
   const body = el?.querySelector(".viz-card-body") as HTMLElement | null;
   if (!body) return;
@@ -3235,21 +5368,79 @@ function runBarChartForCard(card: VizCard) {
   };
   resizeCanvas();
 
-  const getYLabel = () => {
-    if (!card.settings.showLegend) return "";
-    return catSlot.legendText.trim();
-  };
   const getXLabel = () => {
-    if (!card.settings.showLegend) return "";
-    if (valSlot) return valSlot.legendText.trim();
+    // Ось X — частоты. Подпись хранится в yLabelOverride.
+    if (!card.settings.showAxisLabels) return "";
     return card.settings.yLabelOverride.trim();
+  };
+  const getYLabel = () => {
+    // Ось Y — категории (диапазоны). Подпись = legendText слота.
+    if (!card.settings.showAxisLabels) return "";
+    return (slot.legendText || slot.name).trim();
+  };
+  const getLegendText = () => {
+    if (!card.settings.showLegend) return "";
+    return card.settings.legendText.trim() || slot.name;
+  };
+
+  /**
+   * Пересобирает BarChartData из сырых values.
+   * Метки категорий формируются здесь, поэтому всегда
+   * используют актуальную точность (card.settings.precision).
+   */
+  const applyTopN = (valuesArr: number[]): BarChartData => {
+    const prec = card.settings.precision;
+
+    // Метки диапазонов — формируем на каждом вызове
+    const labels: string[] = [];
+    for (let i = 0; i < bins; ++i) {
+      const lo = minV + i * binWidth;
+      const hi = lo + binWidth;
+      labels.push(
+        `${formatNumberPrecise(lo, prec)}–${formatNumberPrecise(hi, prec)}`,
+      );
+    }
+
+    const topN = card.settings.topN;
+
+    if (topN <= 0 || topN >= bins) {
+      const cats: BarChartCategory[] = [];
+      for (let i = 0; i < bins; ++i) {
+        cats.push({ label: labels[i], value: valuesArr[i] });
+      }
+      return { categories: cats, metricLabel: "Частота" };
+    }
+
+    const indexed = valuesArr.map((v, i) => ({ v, i }));
+    indexed.sort((a, b) => b.v - a.v);
+    const topSet = new Set(indexed.slice(0, topN).map((x) => x.i));
+    const keptIdx = Array.from(topSet).sort((a, b) => a - b);
+
+    const cats: BarChartCategory[] = [];
+    for (const i of keptIdx) {
+      cats.push({ label: labels[i], value: valuesArr[i] });
+    }
+    return { categories: cats, metricLabel: "Частота" };
   };
 
   const redraw = () => {
+    const run = runningBars.get(card.id);
+    if (!run) return;
+
+    const values = run.lastValues ?? new Array(bins).fill(0);
+    const data = applyTopN(values);
+    run.lastData = data;
+
     renderer.draw(data, {
       xLabel: getXLabel(),
       yLabel: getYLabel(),
-      topN: card.settings.topN > 0 ? card.settings.topN : undefined,
+      legendText: getLegendText(),
+      showGrid: card.settings.showGrid,
+      showAxisLabels: card.settings.showAxisLabels,
+      preserveOrder: true,
+      precision: card.settings.precision,
+      processed: run.processed,
+      total: run.total,
     });
   };
 
@@ -3259,22 +5450,119 @@ function runBarChartForCard(card: VizCard) {
   });
   observer.observe(body);
 
-  runningBars.set(card.id, {
+  // ---------- Tooltip ----------
+  const tooltip = document.createElement("div");
+  tooltip.className = "viz-tooltip hidden";
+  document.body.appendChild(tooltip);
+
+  const onMove = (e: MouseEvent) => {
+    const rect = canvas.getBoundingClientRect();
+    const hit = renderer.hitTest(e.clientX - rect.left, e.clientY - rect.top);
+    if (!hit) {
+      tooltip.classList.add("hidden");
+      return;
+    }
+    tooltip.innerHTML = `
+      <div class="viz-tooltip-title">диапазон</div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">значения</span>
+        <span class="viz-tooltip-value">${escapeHtml(hit.label)}</span>
+      </div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">кол-во</span>
+        <span class="viz-tooltip-value">${formatNumberRu(hit.value)}</span>
+      </div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">доля</span>
+        <span class="viz-tooltip-value">${(hit.percentage * 100).toFixed(2)}%</span>
+      </div>
+    `;
+    tooltip.style.left = `${e.clientX}px`;
+    tooltip.style.top = `${e.clientY}px`;
+    tooltip.classList.remove("hidden");
+  };
+
+  const onLeave = () => tooltip.classList.add("hidden");
+
+  canvas.addEventListener("mousemove", onMove);
+  canvas.addEventListener("mouseleave", onLeave);
+
+   // ---------- Значок bad rows ----------
+  const errorsCount = stats.nulls + stats.nans + stats.nonNumeric;
+  const issuesHandle = el ? createIssuesBadge(el, card.id) : null;
+  issuesHandle?.update(errorsCount, 0);
+  const issuesBadge: HTMLElement | null = issuesHandle?.el ?? null;
+
+  const run: BarChartRun = {
+    handle: { cancel: () => {} },
+    canvas,
     renderer,
     observer,
-    lastData: data,
+    lastData: null,
+    lastValues: null,
+    processed: 0,
+    total: nums.length,
     getXLabel,
     getYLabel,
-  });
+    tooltip,
+    onMove,
+    onLeave,
+    extractionStats: stats,
+    issuesBadge,
+    redraw,
+  };
+  runningBars.set(card.id, run);
 
   redraw();
+  registerProgressRun(card.id, nums.length);
+
+  const handle = runProgressiveBarChart({
+    catIndices,
+    values: null,
+    numCategories: bins,
+    onProgress: (state) => {
+      run.lastValues = state.values;
+      run.processed = state.processed;
+      run.total = state.total;
+      updateProgressRun(card.id, state.processed, state.total);
+      redraw();
+    },
+    onDone: (state) => {
+      run.lastValues = state.values;
+      run.processed = state.processed;
+      run.total = state.total;
+      finishProgressRun(card.id);
+      redraw();
+
+      const sum = state.values.reduce((a, b) => a + b, 0);
+      const elapsed = Math.round(performance.now() - t0);
+      console.group(
+        `%c[Bar chart ${card.id}] готово за ${elapsed} мс`,
+        "color:#16a34a;font-weight:bold",
+      );
+      console.log(`Обработано: ${state.total.toLocaleString("ru-RU")}`);
+      console.log(`Сумма частот: ${sum.toLocaleString("ru-RU")}`);
+      console.log(`Бинов всего: ${state.categories}`);
+      if (card.settings.topN > 0)
+        console.log(`Показано топ-${card.settings.topN}`);
+      console.groupEnd();
+    },
+  });
+
+  run.handle = handle;
 }
 
 function stopBarChartForCard(cardId: string) {
   const run = runningBars.get(cardId);
   if (!run) return;
+  run.handle.cancel();
   run.observer.disconnect();
+  run.canvas.removeEventListener("mousemove", run.onMove);
+  run.canvas.removeEventListener("mouseleave", run.onLeave);
+  run.tooltip.remove();
+  if (run.issuesBadge) run.issuesBadge.remove();
   runningBars.delete(cardId);
+  unregisterProgressRun(cardId);
 }
 
 // ============================================================

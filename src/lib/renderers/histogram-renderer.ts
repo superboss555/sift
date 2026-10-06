@@ -3,10 +3,15 @@ import type { HistogramChunkResult } from "../sift-core.js";
 export interface HistogramDrawOptions {
   xLabel?: string;
   yLabel?: string;
+  /** Текст легенды: показывается в углу, описывает что за данные. */
+  legendText?: string;
   accent?: string;
   placeholder?: string;
   showGrid?: boolean;
   showAxisLabels?: boolean;
+  binLabels?: string[];
+  /** Знаков после запятой в подписях. 0 = целые. */
+  precision?: number;
 }
 
 export interface HistogramHitInfo {
@@ -21,7 +26,6 @@ export interface HistogramHitInfo {
 export class HistogramRenderer {
   private ctx: CanvasRenderingContext2D;
 
-  // Кэш последней отрисовки — для hitTest
   private lastPlot = {
     padL: 0,
     padT: 0,
@@ -53,16 +57,85 @@ export class HistogramRenderer {
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  draw(state: HistogramChunkResult | null, opts: HistogramDrawOptions = {}) {
+    draw(state: HistogramChunkResult | null, opts: HistogramDrawOptions = {}) {
     const W = this.canvas.clientWidth;
     const H = this.canvas.clientHeight;
     const ctx = this.ctx;
     ctx.clearRect(0, 0, W, H);
 
-    const padL = 52;
+    const showGrid = opts.showGrid !== false;
+    const showAxisLabels = opts.showAxisLabels !== false;
+    const precision =
+      typeof opts.precision === "number" ? opts.precision : 0;
+
+    const AXIS_FONT = "12px -apple-system, sans-serif";
+    const AXIS_COLOR = "#000000";
+
+    // ============================================================
+    // РАСЧЁТ ГРАНИЦ — до всего остального
+    // ============================================================
+
+    // ---- Y-подписи: считаем padL ----
+    let niceMax = 1;
+    if (state && state.counts.length > 0) {
+      let maxCount = 0;
+      for (const c of state.counts) if (c > maxCount) maxCount = c;
+      if (maxCount === 0) maxCount = 1;
+      niceMax = niceCeil(maxCount);
+    }
+
+    let padL = 52;
+    if (showAxisLabels) {
+      ctx.font = AXIS_FONT;
+      let maxYLabelW = 0;
+      for (let i = 0; i <= 5; ++i) {
+        const v = niceMax * (i / 5);
+        const w = ctx.measureText(formatNumberPrecise(v, precision)).width;
+        if (w > maxYLabelW) maxYLabelW = w;
+      }
+      // 14px — полоса под вертикальную подпись оси Y
+      // 8px — зазор до меток
+      padL = Math.max(52, 14 + Math.ceil(maxYLabelW) + 16);
+    }
+
     const padR = 18;
     const padT = 18;
-    const padB = 52;
+
+    // ---- X-подписи: бины + подпись оси X ----
+    const hasBinLabels =
+      showAxisLabels && !!opts.binLabels && opts.binLabels.length > 0;
+
+    let binLabelH = 0; // длина вертикальной метки бина (после поворота)
+    if (hasBinLabels) {
+      ctx.font = AXIS_FONT;
+      let maxLabelW = 0;
+      for (const lb of opts.binLabels!) {
+        const w = ctx.measureText(lb).width;
+        if (w > maxLabelW) maxLabelW = w;
+      }
+      binLabelH = Math.ceil(maxLabelW);
+    }
+
+       const axisXLabelH = opts.xLabel ? 20 : 0;
+
+    // Зазор между бинами и подписью оси X.
+    // Пока бины показываются, между ними и подписью нужно минимум
+    // 20px, чтобы вертикальные метки бинов не касались названия оси.
+    const BIN_AXIS_GAP = showAxisLabels && binLabelH > 0 ? 20 : 6;
+
+    // padB = верхний зазор (6)
+    //      + длина вертикальных меток (binLabelH)
+    //      + зазор между бинами и осью X
+    //      + подпись оси X (axisXLabelH)
+    //      + нижний отступ (6)
+    let padB: number;
+    if (showAxisLabels) {
+      padB = 6 + binLabelH + BIN_AXIS_GAP + axisXLabelH + 6;
+      if (padB < 26) padB = 26;
+    } else {
+      padB = 26;
+    }
+
     const plotW = W - padL - padR;
     const plotH = H - padT - padB;
 
@@ -73,10 +146,11 @@ export class HistogramRenderer {
 
     const accent = opts.accent ?? "#4a9eff";
     const accentDark = "#2563eb";
-    const showGrid = opts.showGrid !== false;
-    const showAxisLabels = opts.showAxisLabels !== false;
 
-    // Оси
+    // ============================================================
+    // ОСИ И ПЛЕЙСХОЛДЕР
+    // ============================================================
+
     ctx.strokeStyle = "#c8cfd8";
     ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -93,15 +167,9 @@ export class HistogramRenderer {
 
     const counts = state.counts;
     const n = counts.length;
+    // niceMax — из блока «РАСЧЁТ ГРАНИЦ»
 
-    let maxCount = 0;
-    for (const c of counts) if (c > maxCount) maxCount = c;
-    if (maxCount === 0) maxCount = 1;
-
-    // Округляем верх шкалы Y до «красивого» числа
-    const niceMax = niceCeil(maxCount);
-
-    // Горизонтальные линии сетки
+    // ---- Сетка ----
     if (showGrid) {
       ctx.strokeStyle = "rgba(148, 163, 184, 0.28)";
       ctx.lineWidth = 1;
@@ -116,21 +184,21 @@ export class HistogramRenderer {
       ctx.setLineDash([]);
     }
 
-    // Подписи на оси Y
+    // ---- Y-подписи ----
     if (showAxisLabels) {
-      ctx.fillStyle = "#64748b";
-      ctx.font = "11px -apple-system, sans-serif";
+      ctx.fillStyle = AXIS_COLOR;
+      ctx.font = AXIS_FONT;
       ctx.textAlign = "right";
       ctx.textBaseline = "middle";
       for (let i = 0; i <= 5; ++i) {
         const t = i / 5;
         const y = padT + plotH - t * plotH;
         const v = niceMax * t;
-        ctx.fillText(formatNumber(v), padL - 8, y);
+        ctx.fillText(formatNumberPrecise(v, precision), padL - 8, y);
       }
     }
 
-    // Столбики
+    // ---- Столбики ----
     const slotW = plotW / n;
     const barW = Math.max(1, slotW - 1);
 
@@ -141,65 +209,138 @@ export class HistogramRenderer {
       const x = padL + i * slotW + 0.5;
       const y = padT + plotH - h;
 
-      // Градиент по высоте столбика
       const grad = ctx.createLinearGradient(0, y, 0, y + h);
       grad.addColorStop(0, accent);
       grad.addColorStop(1, accentDark);
       ctx.fillStyle = grad;
       ctx.fillRect(x, y, barW, h);
 
-      // Обводка
       ctx.strokeStyle = accentDark;
       ctx.lineWidth = 1;
       ctx.strokeRect(x + 0.5, y + 0.5, barW - 1, Math.max(0, h - 1));
     }
 
-    // Подписи на оси X
+    // ---- X-подписи: вертикальные, крупные, чёрные ----
     if (showAxisLabels) {
-      ctx.fillStyle = "#64748b";
-      ctx.font = "11px -apple-system, sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "top";
-      for (let i = 0; i <= 5; ++i) {
-        const t = i / 5;
-        const x = padL + t * plotW;
-        const v = state.min + t * (state.max - state.min);
-        ctx.fillText(formatNumber(v), x, padT + plotH + 6);
+      ctx.fillStyle = AXIS_COLOR;
+      ctx.font = AXIS_FONT;
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+
+      if (opts.binLabels && opts.binLabels.length === n) {
+        const step = Math.max(1, Math.ceil(n / 15));
+        for (let i = 0; i < n; i += step) {
+          const x = padL + (i + 0.5) * slotW;
+          ctx.save();
+          ctx.translate(x, padT + plotH + 6);
+          ctx.rotate(-Math.PI / 2);
+          ctx.fillText(opts.binLabels[i], 0, 0);
+          ctx.restore();
+        }
+      } else {
+        for (let i = 0; i <= 5; ++i) {
+          const t = i / 5;
+          const x = padL + t * plotW;
+          const v = state.min + t * (state.max - state.min);
+          ctx.save();
+          ctx.translate(x, padT + plotH + 6);
+          ctx.rotate(-Math.PI / 2);
+          ctx.fillText(formatNumberPrecise(v, precision), 0, 0);
+          ctx.restore();
+        }
       }
     }
 
-    // Названия осей (из легенды)
+        // ---- Название оси X ----
+    // Поднимаем на 22px, чтобы не пересекаться с Σ и ⚠ внизу
     if (opts.xLabel) {
-      ctx.fillStyle = "#475569";
-      ctx.font = "12px -apple-system, sans-serif";
+      ctx.fillStyle = AXIS_COLOR;
+      ctx.font = "13px -apple-system, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "bottom";
-      ctx.fillText(opts.xLabel, padL + plotW / 2, H - 4);
+      ctx.fillText(opts.xLabel, padL + plotW / 2, H - 22);
     }
+
+    // ---- Название оси Y ----
     if (opts.yLabel) {
+      // Полоса под вертикальную подпись = 14px от левого края
+      const yLabelX = 12;
       ctx.save();
-      ctx.translate(14, padT + plotH / 2);
+      ctx.translate(yLabelX, padT + plotH / 2);
       ctx.rotate(-Math.PI / 2);
-      ctx.fillStyle = "#475569";
-      ctx.font = "12px -apple-system, sans-serif";
+      ctx.fillStyle = AXIS_COLOR;
+      ctx.font = "13px -apple-system, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(opts.yLabel, 0, 0);
       ctx.restore();
     }
 
-        // Сумма столбиков (то, что реально нарисовано) vs обработано
+    // ---- Легенда ----
+    if (opts.legendText) {
+      const legendFont = "11px -apple-system, sans-serif";
+      ctx.font = legendFont;
+      const textW = ctx.measureText(opts.legendText).width;
+      const legendH = 22;
+      const legendPad = 8;
+      const swatchSize = 11;
+      const legendW = legendPad * 2 + swatchSize + 6 + textW;
+      const legendX = padL + plotW - legendW - 6;
+      const legendY = padT + 6;
+
+      ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+      ctx.strokeStyle = "#d8dde3";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      if (typeof (ctx as any).roundRect === "function") {
+        (ctx as any).roundRect(legendX, legendY, legendW, legendH, 4);
+      } else {
+        ctx.rect(legendX, legendY, legendW, legendH);
+      }
+      ctx.fill();
+      ctx.stroke();
+
+      const swatchY = legendY + (legendH - swatchSize) / 2;
+      const swatchX = legendX + legendPad;
+      const swatchGrad = ctx.createLinearGradient(
+        0,
+        swatchY,
+        0,
+        swatchY + swatchSize,
+      );
+      swatchGrad.addColorStop(0, accent);
+      swatchGrad.addColorStop(1, accentDark);
+      ctx.fillStyle = swatchGrad;
+      ctx.fillRect(swatchX, swatchY, swatchSize, swatchSize);
+      ctx.strokeStyle = accentDark;
+      ctx.strokeRect(
+        swatchX + 0.5,
+        swatchY + 0.5,
+        swatchSize - 1,
+        swatchSize - 1,
+      );
+
+      ctx.fillStyle = "#334155";
+      ctx.font = legendFont;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(
+        opts.legendText,
+        swatchX + swatchSize + 6,
+        legendY + legendH / 2,
+      );
+    }
+
+    // ---- Σ и прогресс ----
     let sumCounts = 0;
     for (const c of counts) sumCounts += c;
 
-    // Полоса прогресса
     const progress = state.total > 0 ? state.processed / state.total : 0;
     ctx.fillStyle = "#eef2f6";
     ctx.fillRect(padL, H - 3, plotW, 2);
     ctx.fillStyle = accent;
     ctx.fillRect(padL, H - 3, plotW * progress, 2);
 
-    // Подпись справа: Σ нарисованного / обработанного
     ctx.fillStyle = "#94a3b8";
     ctx.font = "10px ui-monospace, monospace";
     ctx.textAlign = "right";
@@ -210,24 +351,11 @@ export class HistogramRenderer {
       H - 6,
     );
 
-    // Σ — сумма столбиков против total
     ctx.textAlign = "left";
     const sumText = `Σ ${sumCounts.toLocaleString("ru-RU")} / ${state.total.toLocaleString("ru-RU")}`;
     ctx.fillStyle = sumCounts === state.total ? "#16a34a" : "#dc2626";
     ctx.fillText(sumText, padL, H - 6);
 
-    // Индикатор underflow / overflow, если что-то потеряно
-    const overflowCount = state.overflow ?? 0;
-    const underflowCount = state.underflow ?? 0;
-    if (overflowCount > 0 || underflowCount > 0) {
-      const lost = overflowCount + underflowCount;
-      const warn = `⚠ вне диапазона: ${lost}`;
-      ctx.fillStyle = "#dc2626";
-      ctx.textAlign = "center";
-      ctx.fillText(warn, padL + plotW / 2, H - 6);
-    }
-
-    // Кэшируем для hitTest
     this.lastPlot = {
       padL,
       padT,
@@ -243,7 +371,6 @@ export class HistogramRenderer {
     this.hasData = true;
   }
 
-  /** Возвращает информацию о бине под курсором (координаты в CSS-пикселях отн. canvas). */
   hitTest(mouseX: number, mouseY: number): HistogramHitInfo | null {
     if (!this.hasData) return null;
     const p = this.lastPlot;
@@ -262,13 +389,21 @@ export class HistogramRenderer {
     const binWidth = (p.max - p.min) / p.bins;
     const rangeStart = p.min + binIndex * binWidth;
     const rangeEnd = rangeStart + binWidth;
+
+    // Знаменатель для «доли» — сумма всех отрисованных бинов,
+    // а НЕ state.total. Так значения, попавшие «вне диапазона»
+    // (underflow/overflow для bucketed histogram), не размывают долю.
+    // Это согласовано с BarChartRenderer.
+    let sumCounts = 0;
+    for (const c of p.counts) sumCounts += c;
+
     return {
       binIndex,
       count,
       rangeStart,
       rangeEnd,
-      frequency: p.total > 0 ? count / p.total : 0,
-      total: p.total,
+      frequency: sumCounts > 0 ? count / sumCounts : 0,
+      total: sumCounts,
     };
   }
 
@@ -292,7 +427,6 @@ export class HistogramRenderer {
   }
 }
 
-/** Округляет число вверх до «красивого»: 1/2/5 × 10^k. */
 function niceCeil(x: number): number {
   if (x <= 0) return 1;
   const exp = Math.floor(Math.log10(x));
@@ -306,12 +440,16 @@ function niceCeil(x: number): number {
   return nice * base;
 }
 
-function formatNumber(x: number): string {
+/**
+ * Формат числа с настраиваемой точностью.
+ * precision = 0 → целое с разделителем разрядов
+ * precision 1..5 → фиксированное кол-во знаков после точки
+ */
+export function formatNumberPrecise(x: number, precision: number): string {
   if (!isFinite(x)) return String(x);
   const a = Math.abs(x);
-  if (a >= 1e6 || (a > 0 && a < 1e-3)) return x.toExponential(1);
-  if (Number.isInteger(x)) return x.toLocaleString("ru-RU");
-  if (a >= 100) return x.toFixed(0);
-  if (a >= 10) return x.toFixed(1);
-  return x.toFixed(2);
+  if (a >= 1e9) return x.toExponential(1);
+  const p = Math.max(0, Math.min(5, Math.floor(precision)));
+  if (p === 0) return Math.round(x).toLocaleString("ru-RU");
+  return x.toFixed(p);
 }

@@ -194,7 +194,7 @@
           <ul id="columns-list" class="columns-list"></ul>
         </aside>
 
-        <!-- Средняя панель: доступные визуализации -->
+                <!-- Средняя панель: доступные визуализации -->
         <aside class="viz-panel viz-options-panel" id="options-panel">
           <div class="panel-header">
             <h4 class="panel-title">Визуализация</h4>
@@ -203,21 +203,30 @@
               data-panel="options-panel"
               title="Свернуть"
             >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" stroke-width="2.5"
+                   stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="15 18 9 12 15 6"></polyline>
               </svg>
             </button>
           </div>
-          <ul id="viz-options-list" class="viz-options-list"></ul>
+
+          <div class="viz-options-scroll">
+            <div class="viz-options-section">
+              <h5 class="viz-options-section-title">Гистограммы</h5>
+              <ul id="viz-options-histogram" class="viz-options-list"></ul>
+            </div>
+
+            <div class="viz-options-section">
+              <h5 class="viz-options-section-title">Линейчатые</h5>
+              <ul id="viz-options-barchart" class="viz-options-list"></ul>
+            </div>
+
+            <div class="viz-options-section">
+              <h5 class="viz-options-section-title">Другое</h5>
+              <ul id="viz-options-other" class="viz-options-list"></ul>
+            </div>
+          </div>
         </aside>
 
         <!-- Рабочее поле -->
@@ -338,25 +347,52 @@
       </div>
     </div>
 
-    <!-- Модалка: список исключённых строк -->
+        <!-- Модалка: проблемные строки -->
     <div id="bad-rows-modal" class="modal-overlay">
       <div class="modal bad-rows-modal">
-        <h3 class="modal-title">Исключённые строки</h3>
-        <p class="modal-text" id="bad-rows-text">
-          Эти строки не были учтены при построении визуализации.
-        </p>
-        <div class="bad-rows-table-wrap">
-          <table class="bad-rows-table">
-            <thead>
-              <tr>
-                <th>№ строки</th>
-                <th>Значение</th>
-                <th>Причина</th>
-              </tr>
-            </thead>
-            <tbody id="bad-rows-tbody"></tbody>
-          </table>
+        <h3 class="modal-title">Проблемные строки</h3>
+
+        <div class="bad-rows-tabs">
+          <button class="bad-rows-tab active" data-tab="errors">
+            Ошибки
+            <span class="bad-rows-tab-count" id="bad-rows-errors-count">0</span>
+          </button>
+          <button class="bad-rows-tab" data-tab="warnings">
+            Предупреждения
+            <span class="bad-rows-tab-count" id="bad-rows-warnings-count">0</span>
+          </button>
         </div>
+
+        <div class="bad-rows-tab-content" data-tab-content="errors">
+          <div class="bad-rows-table-wrap">
+            <table class="bad-rows-table">
+              <thead>
+                <tr>
+                  <th>№ строки</th>
+                  <th>Значение</th>
+                  <th>Причина</th>
+                </tr>
+              </thead>
+              <tbody id="bad-rows-tbody-errors"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="bad-rows-tab-content hidden" data-tab-content="warnings">
+          <div class="bad-rows-table-wrap">
+            <table class="bad-rows-table">
+              <thead>
+                <tr>
+                  <th>№ строки</th>
+                  <th>Значение</th>
+                  <th>Причина</th>
+                </tr>
+              </thead>
+              <tbody id="bad-rows-tbody-warnings"></tbody>
+            </table>
+          </div>
+        </div>
+
         <button id="bad-rows-cancel" class="modal-cancel">Закрыть</button>
       </div>
     </div>
