@@ -2,6 +2,7 @@ import "./styles.css";
 
 import {
   loadFile,
+  orderOrdinalValues,
   type ParsedData,
   type ColumnType,
 } from "./lib/loader.js";
@@ -257,7 +258,35 @@ let vizScreenInitialized = false;
 // "type-desc"  — по группе типа в обратном порядке, внутри группы Z-A
 type ColumnsSortMode = "original" | "az" | "za" | "type-asc" | "type-desc";
 
-let columnsSortMode: ColumnsSortMode = "original";
+const COLUMNS_SORT_STORAGE_KEY = "sift.columnsSortMode";
+
+function loadColumnsSortMode(): ColumnsSortMode {
+  try {
+    const raw = localStorage.getItem(COLUMNS_SORT_STORAGE_KEY);
+    if (
+      raw === "original" ||
+      raw === "az" ||
+      raw === "za" ||
+      raw === "type-asc" ||
+      raw === "type-desc"
+    ) {
+      return raw;
+    }
+  } catch {
+    /* localStorage может быть недоступен */
+  }
+  return "original";
+}
+
+function saveColumnsSortMode(mode: ColumnsSortMode): void {
+  try {
+    localStorage.setItem(COLUMNS_SORT_STORAGE_KEY, mode);
+  } catch {
+    /* ignore */
+  }
+}
+
+let columnsSortMode: ColumnsSortMode = loadColumnsSortMode();
 
 /** Канонический порядок типов для режима "по типу". */
 const COLUMN_TYPE_ORDER: ColumnType["type"][] = [
@@ -341,13 +370,8 @@ newFileBtn.addEventListener("click", async () => {
   resetVizOptions();
   vizScreenInitialized = false;
 
-  // Сбрасываем сортировку колонок — новый датасет, старые настройки
-  // не имеют смысла
-  columnsSortMode = "original";
-  const sortSelect = document.getElementById(
-    "columns-sort-select",
-  ) as HTMLSelectElement | null;
-  if (sortSelect) sortSelect.value = "original";
+  // Сортировку колонок НЕ сбрасываем: это пользовательское
+  // предпочтение, оно живёт в localStorage и переносится между файлами.
 
   currentFileBar.style.display = "none";
   dropZone.style.display = "";
@@ -980,8 +1004,8 @@ function sortColumnEntries(
       arr.sort((a, b) => {
         const ai = COLUMN_TYPE_ORDER.indexOf(a.ct.type);
         const bi = COLUMN_TYPE_ORDER.indexOf(b.ct.type);
-        if (ai !== bi) return ai - bi;                 // порядок групп фиксирован
-        return cmpRu(a.ct.name, b.ct.name) * nameDir;  // направление имён
+        if (ai !== bi) return ai - bi; // порядок групп фиксирован
+        return cmpRu(a.ct.name, b.ct.name) * nameDir; // направление имён
       });
       break;
     }
@@ -1020,6 +1044,7 @@ function ensureColumnsToolbar(): void {
 
   select.addEventListener("change", () => {
     columnsSortMode = select.value as ColumnsSortMode;
+    saveColumnsSortMode(columnsSortMode);
     renderColumnsList();
   });
 }
@@ -1129,7 +1154,15 @@ const VIZ_OPTIONS: VizOption[] = [
     label: "С накоплением",
     defaultTitle: "Гистограмма с группировкой",
     // Карточке нужны оба типа: numeric (значения) + категориальный (группировка).
-    types: ["numeric", "string", "mixed", "boolean", "date", "datetime", "ordinal"],
+    types: [
+      "numeric",
+      "string",
+      "mixed",
+      "boolean",
+      "date",
+      "datetime",
+      "ordinal",
+    ],
     section: "histogram",
     enabled: true,
     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1156,7 +1189,7 @@ const VIZ_OPTIONS: VizOption[] = [
             <line x1="4" y1="18" x2="10" y2="18"/>
         </svg>`,
   },
-   {
+  {
     id: "barchart-buckets",
     label: "С диапазонами",
     defaultTitle: "Линейчатая с диапазонами",
@@ -1174,7 +1207,15 @@ const VIZ_OPTIONS: VizOption[] = [
     id: "barchart-grouped",
     label: "С накоплением",
     defaultTitle: "Линейчатая с группировкой",
-    types: ["numeric", "string", "mixed", "boolean", "date", "datetime", "ordinal"],
+    types: [
+      "numeric",
+      "string",
+      "mixed",
+      "boolean",
+      "date",
+      "datetime",
+      "ordinal",
+    ],
     section: "barchart",
     enabled: true,
     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1227,6 +1268,19 @@ const VIZ_OPTIONS: VizOption[] = [
             <line x1="3" y1="18" x2="3.01" y2="18"/>
         </svg>`,
   },
+
+  // Фиктивный элемент — реальная карточка-легенда, но создаётся не через
+  // панель визуализаций, а по клику на бейдж «Легенда N» в шапке grouped-
+  // диаграммы. В панели иконок не отображается.
+  {
+    id: "legend",
+    label: "Легенда",
+    types: [],
+    section: "other",
+    enabled: false,
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>`,
+    defaultTitle: "Легенда",
+  },
 ];
 
 const VIZ_TEMPLATES: Record<string, string> = {
@@ -1271,7 +1325,15 @@ interface DataSlot {
   legendText: string;
 }
 
-type BucketOperator = "lt" | "lte" | "gt" | "gte" | "eq" | "neq" | "range";
+type BucketOperator =
+  | "lt"
+  | "lte"
+  | "gt"
+  | "gte"
+  | "eq"
+  | "neq"
+  | "range"
+  | "other";
 
 interface Bucket {
   id: string;
@@ -1297,7 +1359,7 @@ interface CardSettings {
   buckets: Bucket[];
   /** Показывать на оси название группы или её условие. */
   bucketsShowName: boolean;
-  
+
   /** Режим отрисовки для группированной гистограммы. */
   renderMode: "grouped" | "stacked";
 }
@@ -1428,7 +1490,12 @@ function collectVizState(): VizState | null {
         buckets: c.settings.buckets.map((b) => ({ ...b })),
         bucketsShowName: c.settings.bucketsShowName,
         renderMode: c.settings.renderMode,
-      },
+        // linkedCardId есть только у карточек-легенд.
+        // Каст `as any` нужен, потому что SerializedCard в viz-storage.ts
+        // не знает об этом поле. Само поле опционально — у обычных
+        // диаграмм его не будет.
+        ...(c.linkedCardId !== undefined && { linkedCardId: c.linkedCardId }),
+      } as any,
     })),
     activeCardId,
     cardCounter,
@@ -1463,7 +1530,7 @@ async function persistVizState() {
 /** Восстанавливает карточки из сохранённого состояния. */
 function restoreVizState(state: VizState) {
   // Чистим всё текущее
-    for (const id of [...runningHistograms.keys()]) stopHistogramForCard(id);
+  for (const id of [...runningHistograms.keys()]) stopHistogramForCard(id);
   for (const id of [...runningBars.keys()]) stopBarChartForCard(id);
   for (const id of [...runningBucketedHistograms.keys()])
     stopBucketedHistogramForCard(id);
@@ -1486,8 +1553,13 @@ function restoreVizState(state: VizState) {
     }
   }
 
-  // Восстанавливаем карточки
-  for (const sc of state.cards) {
+  // Восстанавливаем карточки в два прохода:
+  //   1) сначала обычные диаграммы,
+  //   2) затем карточки-легенды — они ссылаются на диаграммы по id
+  //      (linkedCardId), и к моменту их восстановления источники
+  //      уже должны существовать в vizCards.
+
+  const restoreCard = (sc: (typeof state.cards)[number]): void => {
     // Проверяем, что колонки в слотах существуют в текущем датасете
     const fixedSlots: [SerializedDataSlot | null, SerializedDataSlot | null] = [
       null,
@@ -1499,13 +1571,17 @@ function restoreVizState(state: VizState) {
       if (!currentData) continue;
       const ct = currentData.columnTypes[slot.columnIndex];
       if (!ct) continue;
-      // Обновляем имя колонки на актуальное
       fixedSlots[i] = {
         columnIndex: slot.columnIndex,
         name: ct.name,
         legendText: slot.legendText,
       };
     }
+
+    const linkedCardId =
+      sc.vizId === "legend"
+        ? ((sc.settings as any).linkedCardId as string | undefined)
+        : undefined;
 
     const card: VizCard = {
       id: sc.id,
@@ -1514,6 +1590,7 @@ function restoreVizState(state: VizState) {
       y: sc.y,
       width: sc.width,
       height: sc.height,
+      linkedCardId,
       settings: {
         title: sc.settings.title,
         showLegend: sc.settings.showLegend ?? false,
@@ -1545,6 +1622,29 @@ function restoreVizState(state: VizState) {
     createCardElement(card);
     vizEmptyState.style.display = "none";
     syncCardVisual(card);
+  };
+
+  // --- Проход 1: обычные карточки (диаграммы) ---
+  for (const sc of state.cards) {
+    if (sc.vizId === "legend") continue;
+    restoreCard(sc);
+  }
+
+  // --- Проход 2: карточки-легенды ---
+  for (const sc of state.cards) {
+    if (sc.vizId !== "legend") continue;
+    const link = (sc.settings as any).linkedCardId as string | undefined;
+    // Если источник не восстановился — легенда не имеет смысла.
+    if (!link || !vizCards.some((c) => c.id === link)) continue;
+    restoreCard(sc);
+  }
+
+  // После восстановления принудительно перерисовываем тела легенд —
+  // исходные диаграммы могли ещё не успеть посчитать себя,
+  // а `refreshLinkedLegends` вызывается из onProgress/onDone
+  // и обновит их в течение следующего кадра.
+  for (const c of vizCards) {
+    if (c.vizId === "legend") renderLegendCardBody(c);
   }
 
   // Восстанавливаем активную карточку
@@ -1565,6 +1665,8 @@ interface VizCard {
   width: number;
   height: number;
   settings: CardSettings;
+  /** Только для vizId === "legend": id диаграммы, к которой привязана легенда. */
+  linkedCardId?: string;
 }
 
 interface SnapCandidate {
@@ -1592,6 +1694,8 @@ const GUIDE_PADDING = 8;
 let vizCards: VizCard[] = [];
 let activeCardId: string | null = null;
 let cardCounter = 0;
+
+const legendBadges = new Map<string, LegendBadgeHandle>();
 
 // ============================================================
 // ТРЕКЕР ПРОГРЕССА ОБРАБОТКИ
@@ -2258,8 +2362,10 @@ function createCardElement(card: VizCard) {
   const viz = VIZ_OPTIONS.find((v) => v.id === card.vizId);
   if (!viz) return;
 
+  const isLegend = card.vizId === "legend";
+
   const el = document.createElement("div");
-  el.className = "viz-card";
+  el.className = isLegend ? "viz-card viz-card-legend" : "viz-card";
   el.id = card.id;
   el.style.left = `${card.x}px`;
   el.style.top = `${card.y}px`;
@@ -2271,8 +2377,8 @@ function createCardElement(card: VizCard) {
             <span class="viz-card-title">${escapeHtml(card.settings.title)}</span>
             <button class="viz-card-close" title="Удалить">×</button>
         </div>
-        <div class="viz-card-body">
-            ${buildVizSVG(card)}
+        <div class="viz-card-body ${isLegend ? "legend-card-body" : ""}">
+            ${isLegend ? "" : buildVizSVG(card)}
         </div>
         <div class="viz-card-resize" title="Изменить размер"></div>
     `;
@@ -2295,7 +2401,8 @@ function createCardElement(card: VizCard) {
     if (
       target.closest(".viz-card-close") ||
       target.closest(".viz-card-resize") ||
-      target.closest(".viz-card-issues-badge")
+      target.closest(".viz-card-issues-badge") ||
+      target.closest(".viz-card-legend-badge")
     ) {
       return;
     }
@@ -2304,6 +2411,16 @@ function createCardElement(card: VizCard) {
 
   makeDraggable(el, card);
   makeResizable(el, card);
+
+  if (isLegend) {
+    renderLegendCardBody(card);
+  }
+
+  // Бейдж легенды — только для grouped-визуализаций
+  if (card.vizId === "histogram-grouped" || card.vizId === "barchart-grouped") {
+    const badge = createLegendBadge(el);
+    if (badge) legendBadges.set(card.id, badge);
+  }
 }
 
 // ---------- Перетаскивание ----------
@@ -2469,6 +2586,12 @@ function makeResizable(el: HTMLElement, card: VizCard) {
 // ---------- Удаление и активация ----------
 
 function removeVizCard(cardId: string) {
+  // Если это диаграмма — сначала удаляем связанные с ней карточки-легенды
+  const linkedLegendIds = vizCards
+    .filter((c) => c.vizId === "legend" && c.linkedCardId === cardId)
+    .map((c) => c.id);
+  for (const id of linkedLegendIds) removeVizCard(id);
+
   stopHistogramForCard(cardId);
   stopBarChartForCard(cardId);
   stopBucketedHistogramForCard(cardId);
@@ -2477,6 +2600,7 @@ function removeVizCard(cardId: string) {
   stopGroupedBarChartForCard(cardId);
 
   vizCards = vizCards.filter((c) => c.id !== cardId);
+  legendBadges.delete(cardId);
   const el = document.getElementById(cardId);
   if (el) el.remove();
 
@@ -2513,8 +2637,6 @@ function setActiveCard(cardId: string | null) {
   updateProgressUI();
   scheduleSaveVizState();
 }
-
-
 
 // Клик по пустому месту рабочего поля — снять выделение.
 // Это переключает индикатор в тулбаре в режим «суммарный».
@@ -2561,7 +2683,9 @@ function renderVizOptions() {
   for (const key of Object.keys(listsBySection)) {
     const list = listsBySection[key];
     if (!list) continue;
-    const items = VIZ_OPTIONS.filter((o) => o.section === key);
+    const items = VIZ_OPTIONS.filter(
+      (o) => o.section === key && o.id !== "legend",
+    );
     list.innerHTML = items.map(renderItem).join("");
 
     list.querySelectorAll<HTMLLIElement>("li").forEach((li) => {
@@ -2615,6 +2739,7 @@ function resetVizOptions() {
     stopBucketedBarChartForCard(id);
 
   vizCards = [];
+  legendBadges.clear();
   activeCardId = null;
   selectedColumnIndex = null;
 
@@ -2673,6 +2798,7 @@ const BUCKET_OPERATOR_OPTIONS: { value: BucketOperator; label: string }[] = [
   { value: "eq", label: "Равно" },
   { value: "neq", label: "Не равно" },
   { value: "range", label: "Диапазон (от–до)" },
+  { value: "other", label: "Другое (все не попавшие)" },
 ];
 
 function bucketOperatorSymbol(op: BucketOperator): string {
@@ -2691,6 +2817,8 @@ function bucketOperatorSymbol(op: BucketOperator): string {
       return "≠";
     case "range":
       return "↔";
+    case "other":
+      return "…";
   }
 }
 
@@ -2712,11 +2840,15 @@ function matchesBucket(value: number, b: Bucket): boolean {
       return v1 != null && value !== v1;
     case "range":
       return v1 != null && v2 != null && value >= v1 && value <= v2;
+    case "other":
+      // "other" ловит всё, что не попало в остальные бакеты.
+      // Здесь всегда false — реальный подсчёт делается отдельно.
+      return false;
   }
 }
 
-
 function formatBucketCondition(b: Bucket): string {
+  if (b.operator === "other") return "другое";
   const v1 = b.value1 != null ? b.value1 : "—";
   const v2 = b.value2 != null ? b.value2 : "—";
   if (b.operator === "range") {
@@ -2728,6 +2860,7 @@ function formatBucketCondition(b: Bucket): string {
 function renderBucketCard(b: Bucket, index: number, total: number): string {
   const canRemove = total > 1;
   const isRange = b.operator === "range";
+  const isOther = b.operator === "other";
 
   const opSelectHtml = `
     <select class="settings-select bucket-op" data-bucket-op>
@@ -2738,8 +2871,18 @@ function renderBucketCard(b: Bucket, index: number, total: number): string {
     </select>
   `;
 
-  const conditionHtml = isRange
-    ? `
+  let conditionHtml: string;
+  if (isOther) {
+    conditionHtml = `
+      <div class="bucket-condition other">
+        ${opSelectHtml}
+        <p class="bucket-other-hint">
+          Соберёт все значения, не попавшие ни в одну из остальных групп.
+        </p>
+      </div>
+    `;
+  } else if (isRange) {
+    conditionHtml = `
       <div class="bucket-condition range">
         ${opSelectHtml}
         <div class="bucket-range-row">
@@ -2755,8 +2898,9 @@ function renderBucketCard(b: Bucket, index: number, total: number): string {
                  step="any" />
         </div>
       </div>
-    `
-    : `
+    `;
+  } else {
+    conditionHtml = `
       <div class="bucket-condition">
         ${opSelectHtml}
         <input type="number" class="settings-input bucket-v1"
@@ -2766,9 +2910,10 @@ function renderBucketCard(b: Bucket, index: number, total: number): string {
                step="any" />
       </div>
     `;
+  }
 
   return `
-    <div class="bucket-card" data-bucket-id="${escapeHtml(b.id)}">
+    <div class="bucket-card${isOther ? " bucket-card-other" : ""}" data-bucket-id="${escapeHtml(b.id)}">
       <div class="bucket-card-header">
         <span class="bucket-card-num">${index + 1}</span>
         <button
@@ -2795,10 +2940,15 @@ function renderBucketCard(b: Bucket, index: number, total: number): string {
   `;
 }
 
-
 function renderSettingsContent(cardId: string) {
   const card = vizCards.find((c) => c.id === cardId);
   if (!card) {
+    closeSettingsPanel();
+    return;
+  }
+
+  // Легенда не имеет настроек — закрываем панель.
+  if (card.vizId === "legend") {
     closeSettingsPanel();
     return;
   }
@@ -2826,7 +2976,17 @@ function renderSettingsContent(cardId: string) {
 
   // ---------- Легенда ----------
   let legendFieldsHtml = "";
-  if (slot0) {
+  if (isGrouped) {
+    // В grouped-визуализациях легенда строится по категориям
+    // группировки (seriesNames), а не по вводимому тексту.
+    // Показываем подсказку, а не поле ввода — иначе пользователь
+    // вводит текст и не понимает, почему он не появляется.
+    legendFieldsHtml = `
+      <p class="settings-hint">
+        Легенда строится автоматически по категориям колонки «Группировка».
+        ${slot1 ? `Сейчас серии — значения из <b>${escapeHtml(slot1.name)}</b>.` : ""}
+      </p>`;
+  } else if (slot0) {
     legendFieldsHtml = `
       <div class="settings-field">
         <label class="settings-label">Текст легенды</label>
@@ -2843,7 +3003,7 @@ function renderSettingsContent(cardId: string) {
   // ---------- Подписи на осях ----------
   let axisFieldsHtml = "";
   if (slot0) {
-    if (isHistogram || isHistogramBuckets) {
+    if (isHistogram || isHistogramBuckets || isHistogramGrouped) {
       axisFieldsHtml = `
         <div class="settings-field">
           <label class="settings-label">Подпись оси X (значения)</label>
@@ -2885,9 +3045,9 @@ function renderSettingsContent(cardId: string) {
   }
 
   // ---------- Данные ----------
-    let dataSlotsHtml = "";
-    if (isGrouped) {
-      dataSlotsHtml = `
+  let dataSlotsHtml = "";
+  if (isGrouped) {
+    dataSlotsHtml = `
         <div class="settings-slot">
           <label class="settings-label">Значения (числовая колонка)</label>
           <div class="settings-dropzone"
@@ -2906,15 +3066,15 @@ function renderSettingsContent(cardId: string) {
         </div>
         <p class="settings-hint">Ось Y — частота. Цвета соответствуют категориям.</p>
       `;
-    } else if (
-      isHistogram ||
-      isHistogramBuckets ||
-      isBarChart ||
-      isBarChartBuckets ||
-      card.vizId === "boxplot" ||
-      card.vizId === "summary"
-    ) {
-      dataSlotsHtml = `
+  } else if (
+    isHistogram ||
+    isHistogramBuckets ||
+    isBarChart ||
+    isBarChartBuckets ||
+    card.vizId === "boxplot" ||
+    card.vizId === "summary"
+  ) {
+    dataSlotsHtml = `
         <div class="settings-slot">
           <label class="settings-label">Значения (числовая колонка)</label>
           <div class="settings-dropzone"
@@ -2925,8 +3085,8 @@ function renderSettingsContent(cardId: string) {
         </div>
         <p class="settings-hint">Ось Y (частота) рассчитывается автоматически.</p>
       `;
-    } else if (card.vizId === "piechart") {
-      dataSlotsHtml = `
+  } else if (card.vizId === "piechart") {
+    dataSlotsHtml = `
         <div class="settings-slot">
           <label class="settings-label">Категории (категориальная колонка)</label>
           <div class="settings-dropzone"
@@ -2937,8 +3097,8 @@ function renderSettingsContent(cardId: string) {
         </div>
         <p class="settings-hint">Показывается доля каждой уникальной категории.</p>
       `;
-    } else {
-      dataSlotsHtml = `
+  } else {
+    dataSlotsHtml = `
         <div class="settings-slot">
           <label class="settings-label">Значения</label>
           <div class="settings-dropzone" data-dropzone="0">
@@ -2947,7 +3107,7 @@ function renderSettingsContent(cardId: string) {
         </div>
         <p class="settings-hint">Показывается количество записей для каждого уникального значения.</p>
       `;
-    }
+  }
 
   // ---------- Диапазоны данных ----------
   let bucketsHtml = "";
@@ -3143,6 +3303,24 @@ data-tooltip="Крайние значения диапазона входят в
   ) as HTMLInputElement;
   legendCheck.addEventListener("change", () => {
     s.showLegend = legendCheck.checked;
+
+    // Обновляем бейдж сразу — иначе он появится только при следующем
+    // пересчёте (onProgress), а при уже посчитанной диаграмме это
+    // может быть надолго.
+    if (isGrouped) {
+      const activeCount = vizCards.find((c) => c.id === cardId)?.settings
+        ? (runningGroupedHistograms.get(cardId)?.getSeriesNames().length ??
+          runningGroupedBars.get(cardId)?.getSeriesNames().length ??
+          0)
+        : 0;
+      if (legendCheck.checked) {
+        legendBadges.get(cardId)?.update(activeCount);
+      } else {
+        // Скрываем бейдж, если галочку убрали
+        legendBadges.get(cardId)?.update(0);
+      }
+    }
+
     renderSettingsContent(cardId);
     redrawActive(card);
     scheduleSaveVizState();
@@ -3207,12 +3385,10 @@ data-tooltip="Крайние значения диапазона входят в
   const BINS_MIN = 5;
   const BINS_MAX = 200;
 
-  const binsRange = settingsContent.querySelector<HTMLInputElement>(
-    "[data-bins-range]",
-  );
-  const binsNumber = settingsContent.querySelector<HTMLInputElement>(
-    "[data-bins-number]",
-  );
+  const binsRange =
+    settingsContent.querySelector<HTMLInputElement>("[data-bins-range]");
+  const binsNumber =
+    settingsContent.querySelector<HTMLInputElement>("[data-bins-number]");
 
   const clampBins = (n: number): number => {
     if (!Number.isFinite(n)) return s.bins;
@@ -3440,9 +3616,25 @@ data-tooltip="Крайние значения диапазона входят в
           opSelect.addEventListener("change", () => {
             const nextOp = opSelect.value as BucketOperator;
             if (nextOp !== bucket.operator) {
+              // "other" может быть только один. Если пользователь
+              // выбрал "other" — сбрасываем его в остальных бакетах.
+              if (nextOp === "other") {
+                for (const other of s.buckets) {
+                  if (other !== bucket && other.operator === "other") {
+                    other.operator = "lt";
+                    other.value1 = null;
+                    other.value2 = null;
+                  }
+                }
+              }
               bucket.operator = nextOp;
               if (nextOp === "range" && bucket.value2 == null) {
                 bucket.value2 = bucket.value1;
+              }
+              // Очищаем ненужные значения при переключении на "other"
+              if (nextOp === "other") {
+                bucket.value1 = null;
+                bucket.value2 = null;
               }
               renderSettingsContent(cardId);
               scheduleSaveVizState();
@@ -3462,7 +3654,7 @@ data-tooltip="Крайние значения диапазона входят в
             scheduleSaveVizState();
           });
           v1Input.addEventListener("change", () => {
-            syncCardVisual(card);        // ← пересчёт на blur/enter
+            syncCardVisual(card); // ← пересчёт на blur/enter
           });
         }
 
@@ -3477,12 +3669,12 @@ data-tooltip="Крайние значения диапазона входят в
             scheduleSaveVizState();
           });
           v2Input.addEventListener("change", () => {
-            syncCardVisual(card);        // ← пересчёт на blur/enter
+            syncCardVisual(card); // ← пересчёт на blur/enter
           });
         }
       });
 
-      const showNameCheck = settingsContent.querySelector(
+    const showNameCheck = settingsContent.querySelector(
       "[data-buckets-show-name]",
     ) as HTMLInputElement | null;
     if (showNameCheck) {
@@ -3551,7 +3743,10 @@ function setupDropzone(dropzone: HTMLElement, card: VizCard, slotIndex: 0 | 1) {
       return;
     }
 
-    if (card.vizId === "histogram-grouped" || card.vizId === "barchart-grouped") {
+    if (
+      card.vizId === "histogram-grouped" ||
+      card.vizId === "barchart-grouped"
+    ) {
       if (slotIndex === 0 && ct.type !== "numeric") {
         reject();
         return;
@@ -3594,6 +3789,11 @@ function setupDropzone(dropzone: HTMLElement, card: VizCard, slotIndex: 0 | 1) {
 // ============================================================
 
 function syncCardVisual(card: VizCard) {
+  if (card.vizId === "legend") {
+    renderLegendCardBody(card);
+    return;
+  }
+
   const slot0 = card.settings.slots[0];
 
   if (card.vizId === "histogram" && slot0 && currentData) {
@@ -3705,13 +3905,23 @@ const runningBucketedHistograms = new Map<string, BucketedHistogramRun>();
 
 function opToCode(op: BucketOperator): number {
   switch (op) {
-    case "lt": return 0;
-    case "lte": return 1;
-    case "gt": return 2;
-    case "gte": return 3;
-    case "eq": return 4;
-    case "neq": return 5;
-    case "range": return 6;
+    case "lt":
+      return 0;
+    case "lte":
+      return 1;
+    case "gt":
+      return 2;
+    case "gte":
+      return 3;
+    case "eq":
+      return 4;
+    case "neq":
+      return 5;
+    case "range":
+      return 6;
+    case "other":
+      // Не отправляем в WASM — учтём отдельно через state.outOfBuckets.
+      return -1;
   }
 }
 
@@ -3768,12 +3978,18 @@ function runBucketedHistogramForCard(card: VizCard) {
   if (data.length === 0 || buckets.length === 0) return;
 
   const nB = buckets.length;
+
+  const otherIdx = buckets.findIndex((b) => b.operator === "other");
+
   const ops = new Int32Array(nB);
   const v1s = new Float64Array(nB);
   const v2s = new Float64Array(nB);
-
   for (let i = 0; i < nB; ++i) {
     const b = buckets[i];
+    if (b.operator === "other") {
+      ops[i] = -1;
+      continue;
+    }
     const valid =
       b.value1 != null && (b.operator !== "range" || b.value2 != null);
     if (!valid) {
@@ -3784,6 +4000,16 @@ function runBucketedHistogramForCard(card: VizCard) {
     v1s[i] = b.value1!;
     v2s[i] = b.operator === "range" ? b.value2! : 0;
   }
+
+  // Подставляет state.outOfBuckets в слот "other", если он есть.
+  const processState = (
+    state: BucketedHistogramChunkResult,
+  ): BucketedHistogramChunkResult => {
+    if (otherIdx < 0) return state;
+    const countsCopy = [...state.counts];
+    countsCopy[otherIdx] = state.outOfBuckets;
+    return { ...state, counts: countsCopy, outOfBuckets: 0 };
+  };
 
   // ---- Canvas ----
   body.innerHTML = '<canvas class="viz-canvas-2d"></canvas>';
@@ -3892,7 +4118,7 @@ function runBucketedHistogramForCard(card: VizCard) {
   canvas.addEventListener("mousemove", onMove);
   canvas.addEventListener("mouseleave", onLeave);
 
-      // ---------- Значок проблемных строк ----------
+  // ---------- Значок проблемных строк ----------
   const errorsCount = stats.nulls + stats.nans + stats.nonNumeric;
   const issuesHandle = el ? createIssuesBadge(el, card.id) : null;
   const issuesBadge: HTMLElement | null = issuesHandle?.el ?? null;
@@ -3936,16 +4162,18 @@ function runBucketedHistogramForCard(card: VizCard) {
     v1s,
     v2s,
     numBuckets: nB,
-        onProgress: (state) => {
+    onProgress: (rawState) => {
+      const state = processState(rawState);
       run.lastState = state;
       updateProgressRun(card.id, state.processed, state.total);
-            issuesHandle?.update(errorsCount, state.outOfBuckets);
+      issuesHandle?.update(errorsCount, state.outOfBuckets);
       redraw();
     },
-    onDone: (state) => {
+    onDone: (rawState) => {
+      const state = processState(rawState);
       run.lastState = state;
       finishProgressRun(card.id);
-            issuesHandle?.update(errorsCount, state.outOfBuckets);
+      issuesHandle?.update(errorsCount, state.outOfBuckets);
       redraw();
 
       const sum = state.counts.reduce((a, b) => a + b, 0);
@@ -4060,12 +4288,19 @@ function runBucketedBarChartForCard(card: VizCard) {
   if (data.length === 0 || buckets.length === 0) return;
 
   const nB = buckets.length;
+
+  const otherIdx = buckets.findIndex((b) => b.operator === "other");
+
+  // --- ops, v1s, v2s из buckets ---
   const ops = new Int32Array(nB);
   const v1s = new Float64Array(nB);
   const v2s = new Float64Array(nB);
-
   for (let i = 0; i < nB; ++i) {
     const b = buckets[i];
+    if (b.operator === "other") {
+      ops[i] = -1;
+      continue;
+    }
     const valid =
       b.value1 != null && (b.operator !== "range" || b.value2 != null);
     if (!valid) {
@@ -4076,6 +4311,15 @@ function runBucketedBarChartForCard(card: VizCard) {
     v1s[i] = b.value1!;
     v2s[i] = b.operator === "range" ? b.value2! : 0;
   }
+
+  const processState = (
+    state: BucketedHistogramChunkResult,
+  ): BucketedHistogramChunkResult => {
+    if (otherIdx < 0) return state;
+    const countsCopy = [...state.counts];
+    countsCopy[otherIdx] = state.outOfBuckets;
+    return { ...state, counts: countsCopy, outOfBuckets: 0 };
+  };
 
   // ---- Canvas ----
   body.innerHTML = '<canvas class="viz-canvas-2d"></canvas>';
@@ -4234,13 +4478,15 @@ function runBucketedBarChartForCard(card: VizCard) {
     v1s,
     v2s,
     numBuckets: nB,
-    onProgress: (state) => {
+    onProgress: (rawState) => {
+      const state = processState(rawState);
       run.lastState = state;
       updateProgressRun(card.id, state.processed, state.total);
       issuesHandle?.update(errorsCount, state.outOfBuckets);
       redraw();
     },
-    onDone: (state) => {
+    onDone: (rawState) => {
+      const state = processState(rawState);
       run.lastState = state;
       finishProgressRun(card.id);
       issuesHandle?.update(errorsCount, state.outOfBuckets);
@@ -4295,6 +4541,10 @@ interface HistogramRun {
 const runningHistograms = new Map<string, HistogramRun>();
 
 const MAX_BAD_ROWS = 1000;
+
+// Если серий больше, чем это число — встроенная легенда не рисуется,
+// вместо неё показывается бейдж «Легенда (N)» с модалкой.
+const MAX_INLINE_LEGEND_ITEMS = 6;
 
 function extractNumericColumn(
   data: ParsedData,
@@ -4417,9 +4667,7 @@ function createIssuesBadge(
 
   header.insertBefore(badge, closeBtn);
 
-  const errorsPart = badge.querySelector(
-    ".issues-part.errors",
-  ) as HTMLElement;
+  const errorsPart = badge.querySelector(".issues-part.errors") as HTMLElement;
   const warningsPart = badge.querySelector(
     ".issues-part.warnings",
   ) as HTMLElement;
@@ -4451,6 +4699,53 @@ function createIssuesBadge(
         warningsCountEl.textContent = warnings.toLocaleString("ru-RU");
       } else {
         warningsPart.classList.add("hidden");
+      }
+    },
+  };
+}
+
+/**
+ * Компактный бейдж «Легенда (N)» в шапке карточки.
+ * Видим, только если:
+ *   - это grouped-визуализация,
+ *   - задан слот группировки,
+ *   - серий больше, чем MAX_INLINE_LEGEND_ITEMS.
+ */
+interface LegendBadgeHandle {
+  el: HTMLElement;
+  update: (seriesCount: number) => void;
+}
+
+function createLegendBadge(cardEl: HTMLElement): LegendBadgeHandle | null {
+  const header = cardEl.querySelector(".viz-card-header");
+  const closeBtn = header?.querySelector(".viz-card-close");
+  if (!header || !closeBtn) return null;
+
+  const badge = document.createElement("button");
+  badge.type = "button";
+  badge.className = "viz-card-legend-badge hidden";
+  badge.title = "Открыть полную легенду";
+  badge.innerHTML = `Легенда <span class="legend-badge-count">0</span>`;
+  badge.addEventListener("pointerdown", (e) => e.stopPropagation());
+  badge.addEventListener("dblclick", (e) => e.stopPropagation());
+  badge.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openOrFocusLegendCard(cardEl.id);
+  });
+
+  // Вставляем слева от close
+  header.insertBefore(badge, closeBtn);
+
+  const countEl = badge.querySelector(".legend-badge-count") as HTMLElement;
+
+  return {
+    el: badge,
+    update(seriesCount: number) {
+      if (seriesCount > MAX_INLINE_LEGEND_ITEMS) {
+        countEl.textContent = String(seriesCount);
+        badge.classList.remove("hidden");
+      } else {
+        badge.classList.add("hidden");
       }
     },
   };
@@ -4624,7 +4919,7 @@ function runHistogramForCard(card: VizCard) {
   canvas.addEventListener("mousemove", onMove);
   canvas.addEventListener("mouseleave", onLeave);
 
-    // ---------- Значок bad rows ----------
+  // ---------- Значок bad rows ----------
   const errorsCount = stats.nulls + stats.nans + stats.nonNumeric;
   const issuesHandle = el ? createIssuesBadge(el, card.id) : null;
   issuesHandle?.update(errorsCount, 0);
@@ -4767,7 +5062,11 @@ function runGroupedBarChartForCard(card: VizCard) {
     nonNumeric: 0,
     badRows: [],
   };
-  const pushBad = (rowNumber: number, reason: BadRow["reason"], rawValue: string) => {
+  const pushBad = (
+    rowNumber: number,
+    reason: BadRow["reason"],
+    rawValue: string,
+  ) => {
     if (stats.badRows.length < MAX_BAD_ROWS) {
       stats.badRows.push({ rowNumber, reason, rawValue });
     }
@@ -4779,16 +5078,30 @@ function runGroupedBarChartForCard(card: VizCard) {
     const rowNumber = i + 1;
 
     let num: number;
-    if (rawNum == null) { stats.nulls++; pushBad(rowNumber, "null", ""); continue; }
+    if (rawNum == null) {
+      stats.nulls++;
+      pushBad(rowNumber, "null", "");
+      continue;
+    }
     if (typeof rawNum === "number") {
-      if (!Number.isFinite(rawNum)) { stats.nans++; pushBad(rowNumber, "nan", String(rawNum)); continue; }
+      if (!Number.isFinite(rawNum)) {
+        stats.nans++;
+        pushBad(rowNumber, "nan", String(rawNum));
+        continue;
+      }
       num = rawNum;
     } else {
       const s = String(rawNum).trim();
-      if (s === "") { stats.nulls++; pushBad(rowNumber, "null", ""); continue; }
+      if (s === "") {
+        stats.nulls++;
+        pushBad(rowNumber, "null", "");
+        continue;
+      }
       const parsed = Number(s);
       if (!Number.isFinite(parsed)) {
-        stats.nonNumeric++; pushBad(rowNumber, "nonNumeric", s); continue;
+        stats.nonNumeric++;
+        pushBad(rowNumber, "nonNumeric", s);
+        continue;
       }
       num = parsed;
     }
@@ -4810,13 +5123,28 @@ function runGroupedBarChartForCard(card: VizCard) {
 
   const catCounts = new Map<string, number>();
   for (const c of catsList) catCounts.set(c, (catCounts.get(c) ?? 0) + 1);
-  const sortedCats = Array.from(catCounts.entries())
-    .sort((a, b) => b[1] - a[1])
-    .map(([name]) => name);
+
+  // Ordinal — порядок по словарю шкалы, остальное — по частоте.
+  const catColType = currentData.columnTypes[slotCat.columnIndex]?.type;
+  let sortedCats: string[];
+  if (catColType === "ordinal") {
+    const ordered = orderOrdinalValues(Array.from(catCounts.keys()));
+    sortedCats =
+      ordered ??
+      Array.from(catCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .map(([name]) => name);
+  } else {
+    sortedCats = Array.from(catCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([name]) => name);
+  }
 
   const topN = card.settings.topN;
   const activeCats = topN > 0 ? sortedCats.slice(0, topN) : sortedCats;
-  const activeIdx = new Map(activeCats.map((name, idx) => [name, idx] as const));
+  const activeIdx = new Map(
+    activeCats.map((name, idx) => [name, idx] as const),
+  );
 
   const finalCatIndices = new Int32Array(n);
   for (let i = 0; i < n; ++i) {
@@ -4826,14 +5154,23 @@ function runGroupedBarChartForCard(card: VizCard) {
 
   if (activeCats.length === 0) return;
 
+  const otherIdx = buckets.findIndex((b) => b.operator === "other");
+
   const ops = new Int32Array(nB);
   const v1s = new Float64Array(nB);
   const v2s = new Float64Array(nB);
   for (let i = 0; i < nB; ++i) {
     const b = buckets[i];
+    if (b.operator === "other") {
+      ops[i] = -1;
+      continue;
+    }
     const valid =
       b.value1 != null && (b.operator !== "range" || b.value2 != null);
-    if (!valid) { ops[i] = -1; continue; }
+    if (!valid) {
+      ops[i] = -1;
+      continue;
+    }
     ops[i] = opToCode(b.operator);
     v1s[i] = b.value1!;
     v2s[i] = b.operator === "range" ? b.value2! : 0;
@@ -4854,7 +5191,9 @@ function runGroupedBarChartForCard(card: VizCard) {
   const getXLabel = () =>
     card.settings.showAxisLabels ? card.settings.yLabelOverride.trim() : "";
   const getYLabel = () =>
-    card.settings.showAxisLabels ? (slotNum.legendText || slotNum.name).trim() : "";
+    card.settings.showAxisLabels
+      ? (slotNum.legendText || slotNum.name).trim()
+      : "";
 
   const getBinLabels = (): string[] =>
     card.settings.buckets.map((b) =>
@@ -4867,17 +5206,24 @@ function runGroupedBarChartForCard(card: VizCard) {
   const getSeriesNames = (): string[] => activeCats;
 
   const redraw = () => {
-    const run = runningGroupedBars.get(card.id);
+    const run = runningGroupedHistograms.get(card.id);
     const state = run?.lastState ?? null;
+    const names = getSeriesNames();
+
+    // Если серий больше порога — inline-легенда отключается,
+    // вместо неё показывается бейдж + модалка.
+    const inlineLegend =
+      card.settings.showLegend && names.length <= MAX_INLINE_LEGEND_ITEMS;
+
     renderer.draw(state, {
       xLabel: getXLabel(),
       yLabel: getYLabel(),
       showGrid: card.settings.showGrid,
       showAxisLabels: card.settings.showAxisLabels,
-      showLegend: card.settings.showLegend,
+      showLegend: inlineLegend,
       precision: card.settings.precision,
       renderMode: card.settings.renderMode,
-      seriesNames: getSeriesNames(),
+      seriesNames: names,
       binLabels: getBinLabels(),
       placeholder: "Готовим первую порцию…",
     });
@@ -4888,6 +5234,31 @@ function runGroupedBarChartForCard(card: VizCard) {
     redraw();
   });
   observer.observe(body);
+
+  // ---- Расчёт «other» в JS ---- (та же логика, что и в grouped histogram)
+  const computeOtherCounts = (): number[] | null => {
+    if (otherIdx < 0) return null;
+    const counts = new Array<number>(activeCats.length).fill(0);
+
+    for (let i = 0; i < finalData.length; i++) {
+      const v = finalData[i];
+      let matched = false;
+      for (let bi = 0; bi < nB; bi++) {
+        if (bi === otherIdx) continue;
+        if (ops[bi] === -1) continue;
+        const op = buckets[bi];
+        if (matchesBucket(v, op)) {
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) {
+        const ci = finalCatIndices[i];
+        if (ci >= 0 && ci < counts.length) counts[ci]++;
+      }
+    }
+    return counts;
+  };
 
   const errorsCount = stats.nulls + stats.nans + stats.nonNumeric;
   const issuesHandle = el ? createIssuesBadge(el, card.id) : null;
@@ -4963,12 +5334,29 @@ function runGroupedBarChartForCard(card: VizCard) {
       run.lastState = state;
       updateProgressRun(card.id, state.processed, state.total);
       issuesHandle?.update(errorsCount, state.outOfBuckets);
+      legendBadges.get(card.id)?.update(activeCats.length);
+      refreshLinkedLegends(card.id);
       redraw();
     },
-    onDone: (state) => {
+    onDone: (rawState) => {
+      let state = rawState;
+
+      // Досчитываем "other" — общий outOfBuckets раскладываем
+      // по категориям вручную.
+      const otherCounts = computeOtherCounts();
+      if (otherCounts && otherIdx >= 0) {
+        const countsCopy = [...state.counts];
+        for (let ci = 0; ci < otherCounts.length; ci++) {
+          countsCopy[otherIdx * activeCats.length + ci] = otherCounts[ci];
+        }
+        state = { ...state, counts: countsCopy, outOfBuckets: 0 };
+      }
+
       run.lastState = state;
       finishProgressRun(card.id);
       issuesHandle?.update(errorsCount, state.outOfBuckets);
+      legendBadges.get(card.id)?.update(activeCats.length);
+      refreshLinkedLegends(card.id);
       redraw();
     },
   });
@@ -5029,7 +5417,11 @@ function runGroupedHistogramForCard(card: VizCard) {
     nonNumeric: 0,
     badRows: [],
   };
-  const pushBad = (rowNumber: number, reason: BadRow["reason"], rawValue: string) => {
+  const pushBad = (
+    rowNumber: number,
+    reason: BadRow["reason"],
+    rawValue: string,
+  ) => {
     if (stats.badRows.length < MAX_BAD_ROWS) {
       stats.badRows.push({ rowNumber, reason, rawValue });
     }
@@ -5042,16 +5434,30 @@ function runGroupedHistogramForCard(card: VizCard) {
 
     // --- числовая колонка ---
     let num: number;
-    if (rawNum == null) { stats.nulls++; pushBad(rowNumber, "null", ""); continue; }
+    if (rawNum == null) {
+      stats.nulls++;
+      pushBad(rowNumber, "null", "");
+      continue;
+    }
     if (typeof rawNum === "number") {
-      if (!Number.isFinite(rawNum)) { stats.nans++; pushBad(rowNumber, "nan", String(rawNum)); continue; }
+      if (!Number.isFinite(rawNum)) {
+        stats.nans++;
+        pushBad(rowNumber, "nan", String(rawNum));
+        continue;
+      }
       num = rawNum;
     } else {
       const s = String(rawNum).trim();
-      if (s === "") { stats.nulls++; pushBad(rowNumber, "null", ""); continue; }
+      if (s === "") {
+        stats.nulls++;
+        pushBad(rowNumber, "null", "");
+        continue;
+      }
       const parsed = Number(s);
       if (!Number.isFinite(parsed)) {
-        stats.nonNumeric++; pushBad(rowNumber, "nonNumeric", s); continue;
+        stats.nonNumeric++;
+        pushBad(rowNumber, "nonNumeric", s);
+        continue;
       }
       num = parsed;
     }
@@ -5072,18 +5478,35 @@ function runGroupedHistogramForCard(card: VizCard) {
   const finalData = tmpData.slice(0, n);
   const catsList = tmpCatStrings.slice(0, n);
 
-  // Уникальные категории + частоты → сортировка по частоте убыв.
+  // Уникальные категории.
   const catCounts = new Map<string, number>();
   for (const c of catsList) {
     catCounts.set(c, (catCounts.get(c) ?? 0) + 1);
   }
-  const sortedCats = Array.from(catCounts.entries())
-    .sort((a, b) => b[1] - a[1])
-    .map(([name]) => name);
+
+  // Для ordinal-колонок порядок задаётся словарём шкалы
+  // (Bronze → Silver → Gold → Platinum), а не частотой.
+  // Для остальных — по частоте убыв., как раньше.
+  const catColType = currentData.columnTypes[slotCat.columnIndex]?.type;
+  let sortedCats: string[];
+  if (catColType === "ordinal") {
+    const ordered = orderOrdinalValues(Array.from(catCounts.keys()));
+    sortedCats =
+      ordered ??
+      Array.from(catCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .map(([name]) => name);
+  } else {
+    sortedCats = Array.from(catCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([name]) => name);
+  }
 
   const topN = card.settings.topN;
   const activeCats = topN > 0 ? sortedCats.slice(0, topN) : sortedCats;
-  const activeIdx = new Map(activeCats.map((name, idx) => [name, idx] as const));
+  const activeIdx = new Map(
+    activeCats.map((name, idx) => [name, idx] as const),
+  );
 
   const finalCatIndices = new Int32Array(n);
   for (let i = 0; i < n; ++i) {
@@ -5093,15 +5516,24 @@ function runGroupedHistogramForCard(card: VizCard) {
 
   if (activeCats.length === 0) return;
 
+  const otherIdx = buckets.findIndex((b) => b.operator === "other");
+
   // --- ops, v1s, v2s из buckets ---
   const ops = new Int32Array(nB);
   const v1s = new Float64Array(nB);
   const v2s = new Float64Array(nB);
   for (let i = 0; i < nB; ++i) {
     const b = buckets[i];
+    if (b.operator === "other") {
+      ops[i] = -1;
+      continue;
+    }
     const valid =
       b.value1 != null && (b.operator !== "range" || b.value2 != null);
-    if (!valid) { ops[i] = -1; continue; }
+    if (!valid) {
+      ops[i] = -1;
+      continue;
+    }
     ops[i] = opToCode(b.operator);
     v1s[i] = b.value1!;
     v2s[i] = b.operator === "range" ? b.value2! : 0;
@@ -5118,8 +5550,10 @@ function runGroupedHistogramForCard(card: VizCard) {
   };
   resizeCanvas();
 
-  const getXLabel = () => (card.settings.showAxisLabels ? slotNum.legendText.trim() : "");
-  const getYLabel = () => (card.settings.showAxisLabels ? card.settings.yLabelOverride.trim() : "");
+  const getXLabel = () =>
+    card.settings.showAxisLabels ? slotNum.legendText.trim() : "";
+  const getYLabel = () =>
+    card.settings.showAxisLabels ? card.settings.yLabelOverride.trim() : "";
 
   const getBinLabels = (): string[] =>
     card.settings.buckets.map((b) =>
@@ -5133,16 +5567,22 @@ function runGroupedHistogramForCard(card: VizCard) {
   const redraw = () => {
     const run = runningGroupedHistograms.get(card.id);
     const state = run?.lastState ?? null;
+    const names = getSeriesNames();
+
+    // Если серий больше порога — inline-легенда отключается,
+    // вместо неё показывается бейдж + модалка.
+    const inlineLegend =
+      card.settings.showLegend && names.length <= MAX_INLINE_LEGEND_ITEMS;
 
     renderer.draw(state, {
       xLabel: getXLabel(),
       yLabel: getYLabel(),
       showGrid: card.settings.showGrid,
       showAxisLabels: card.settings.showAxisLabels,
-      showLegend: card.settings.showLegend,
+      showLegend: inlineLegend,
       precision: card.settings.precision,
       renderMode: card.settings.renderMode,
-      seriesNames: getSeriesNames(),
+      seriesNames: names,
       binLabels: getBinLabels(),
       placeholder: "Готовим первую порцию…",
     });
@@ -5153,6 +5593,36 @@ function runGroupedHistogramForCard(card: VizCard) {
     redraw();
   });
   observer.observe(body);
+
+  // ---- Расчёт «other» в JS ----
+  //
+  // state.outOfBuckets в WASM не разбит по категориям, поэтому
+  // "другое" считаем вручную: пробегаем по finalData, отбираем
+  // значения, не попавшие ни в один валидный бакет, и раскладываем
+  // их по категориям через finalCatIndices.
+  const computeOtherCounts = (): number[] | null => {
+    if (otherIdx < 0) return null;
+    const counts = new Array<number>(activeCats.length).fill(0);
+
+    for (let i = 0; i < finalData.length; i++) {
+      const v = finalData[i];
+      let matched = false;
+      for (let bi = 0; bi < nB; bi++) {
+        if (bi === otherIdx) continue;
+        if (ops[bi] === -1) continue;
+        const op = buckets[bi];
+        if (matchesBucket(v, op)) {
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) {
+        const ci = finalCatIndices[i];
+        if (ci >= 0 && ci < counts.length) counts[ci]++;
+      }
+    }
+    return counts;
+  };
 
   // ---------- Значок ошибок ----------
   const errorsCount = stats.nulls + stats.nans + stats.nonNumeric;
@@ -5230,12 +5700,27 @@ function runGroupedHistogramForCard(card: VizCard) {
       run.lastState = state;
       updateProgressRun(card.id, state.processed, state.total);
       issuesHandle?.update(errorsCount, state.outOfBuckets);
+      legendBadges.get(card.id)?.update(activeCats.length);
+      refreshLinkedLegends(card.id);
       redraw();
     },
-    onDone: (state) => {
+    onDone: (rawState) => {
+      let state = rawState;
+
+      const otherCounts = computeOtherCounts();
+      if (otherCounts && otherIdx >= 0) {
+        const countsCopy = [...state.counts];
+        for (let ci = 0; ci < otherCounts.length; ci++) {
+          countsCopy[otherIdx * activeCats.length + ci] = otherCounts[ci];
+        }
+        state = { ...state, counts: countsCopy, outOfBuckets: 0 };
+      }
+
       run.lastState = state;
       finishProgressRun(card.id);
       issuesHandle?.update(errorsCount, state.outOfBuckets);
+      legendBadges.get(card.id)?.update(activeCats.length);
+      refreshLinkedLegends(card.id);
       redraw();
     },
   });
@@ -5295,6 +5780,12 @@ function computeOutOfBucketsRows(card: VizCard): {
     card.vizId !== "barchart-buckets" &&
     !isGrouped
   ) {
+    return { count: 0, rows: [] };
+  }
+
+  // Если в настройках есть бакет "other" — он забирает все
+  // out-of-bucket строки себе, значит warnings-строк нет.
+  if (card.settings.buckets.some((b) => b.operator === "other")) {
     return { count: 0, rows: [] };
   }
 
@@ -5480,10 +5971,201 @@ function openBadRowsModal(cardId: string) {
   badRowsModal.classList.add("open");
 }
 
-
 function closeBadRowsModal() {
   badRowsModal.classList.remove("open");
   document.body.classList.remove("modal-open");
+}
+
+// ------------------------------------------------------------
+// МОДАЛКА РАСШИРЕННОЙ ЛЕГЕНДЫ
+// ------------------------------------------------------------
+
+interface LegendRow {
+  color: string;
+  name: string;
+  count: number;
+  share: number;
+}
+
+/**
+ * Открывает существующую карточку-легенду для указанной диаграммы
+ * или создаёт новую, если её ещё нет.
+ */
+function openOrFocusLegendCard(sourceCardId: string): void {
+  const sourceCard = vizCards.find((c) => c.id === sourceCardId);
+  if (!sourceCard) return;
+
+  const existing = vizCards.find(
+    (c) => c.vizId === "legend" && c.linkedCardId === sourceCardId,
+  );
+  if (existing) {
+    setActiveCard(existing.id);
+    return;
+  }
+
+  createLegendCard(sourceCard);
+}
+
+function createLegendCard(sourceCard: VizCard): VizCard {
+  const id = `viz-card-${++cardCounter}`;
+  const width = 320;
+  const height = 380;
+  const pos = findPlacement(width, height);
+
+  const card: VizCard = {
+    id,
+    vizId: "legend",
+    x: pos.x,
+    y: pos.y,
+    width,
+    height,
+    linkedCardId: sourceCard.id,
+    settings: {
+      title: `Легенда · ${sourceCard.settings.title}`,
+      showLegend: false,
+      showAxisLabels: false,
+      legendText: "",
+      slots: [null, null],
+      bins: 30,
+      yLabelOverride: "",
+      topN: 0,
+      showGrid: false,
+      precision: 0,
+      buckets: [],
+      bucketsShowName: false,
+      renderMode: "grouped",
+    },
+  };
+
+  vizCards.push(card);
+  createCardElement(card);
+  vizEmptyState.style.display = "none";
+  setActiveCard(card.id);
+  scheduleSaveVizState();
+  return card;
+}
+
+/**
+ * Отрисовывает содержимое карточки-легенды: заголовок с Σ, таблицу серий.
+ * Вызывается при создании карточки и при обновлениях исходной диаграммы.
+ */
+function renderLegendCardBody(card: VizCard): void {
+  if (card.vizId !== "legend") return;
+  const el = document.getElementById(card.id);
+  if (!el) return;
+  const body = el.querySelector<HTMLElement>(".legend-card-body");
+  if (!body) return;
+
+  const sourceCard = card.linkedCardId
+    ? vizCards.find((c) => c.id === card.linkedCardId)
+    : null;
+
+  if (!sourceCard) {
+    body.innerHTML = `<p class="legend-empty">Исходная диаграмма удалена.</p>`;
+    return;
+  }
+
+  const rows = collectLegendRows(sourceCard);
+  if (rows.length === 0) {
+    body.innerHTML = `<p class="legend-empty">Нет данных для отображения.</p>`;
+    return;
+  }
+
+  const total = rows.reduce((s, r) => s + r.count, 0);
+
+  body.innerHTML = `
+    <div class="legend-card-summary">
+      <span class="legend-card-summary-label">Серий:</span>
+      <span class="legend-card-summary-value">${rows.length}</span>
+      <span class="legend-card-summary-sep">·</span>
+      <span class="legend-card-summary-label">Σ</span>
+      <span class="legend-card-summary-value">${total.toLocaleString("ru-RU")}</span>
+    </div>
+    <div class="legend-card-table-wrap">
+      <table class="legend-table">
+        <thead>
+          <tr>
+            <th style="width: 26px"></th>
+            <th>Серия</th>
+            <th style="text-align: right">Кол-во</th>
+            <th style="text-align: right">Доля</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows
+            .map(
+              (r) => `
+            <tr>
+              <td><span class="legend-swatch" style="background:${r.color}"></span></td>
+              <td class="legend-name">${escapeHtml(r.name)}</td>
+              <td class="legend-count">${r.count.toLocaleString("ru-RU")}</td>
+              <td class="legend-share">${(r.share * 100).toFixed(1)}%</td>
+            </tr>
+          `,
+            )
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+/**
+ * Перерисовывает все карточки-легенды, привязанные к указанной диаграмме.
+ * Вызывается из onProgress/onDone диаграммы, когда данные обновились.
+ */
+function refreshLinkedLegends(sourceCardId: string): void {
+  for (const lc of vizCards) {
+    if (lc.vizId === "legend" && lc.linkedCardId === sourceCardId) {
+      renderLegendCardBody(lc);
+    }
+  }
+}
+
+/**
+ * Собирает строки легенды из последнего состояния run-объекта:
+ * имя серии, общее количество, доля, цвет из палитры рендерера.
+ */
+function collectLegendRows(card: VizCard): LegendRow[] {
+  const groupedHist = runningGroupedHistograms.get(card.id);
+  const groupedBar = runningGroupedBars.get(card.id);
+
+  const state = groupedHist?.lastState ?? groupedBar?.lastState ?? null;
+  const seriesNames =
+    groupedHist?.getSeriesNames() ?? groupedBar?.getSeriesNames() ?? [];
+
+  if (!state || seriesNames.length === 0) return [];
+
+  const nCats = state.numCategories;
+  const nB = state.numBuckets;
+
+  // Сумма по каждому столбцу (каждая категория)
+  const totals = new Array<number>(nCats).fill(0);
+  for (let b = 0; b < nB; b++) {
+    for (let c = 0; c < nCats; c++) {
+      totals[c] += state.counts[b * nCats + c];
+    }
+  }
+
+  const grandTotal = totals.reduce((s, v) => s + v, 0);
+
+  const PALETTE = [
+    "#4a9eff",
+    "#f59e0b",
+    "#10b981",
+    "#ef4444",
+    "#8b5cf6",
+    "#ec4899",
+    "#14b8a6",
+    "#f97316",
+  ];
+
+  return seriesNames.map((name, i) => ({
+    color: PALETTE[i % PALETTE.length],
+    name,
+    count: totals[i] ?? 0,
+    share: grandTotal > 0 ? (totals[i] ?? 0) / grandTotal : 0,
+  }));
 }
 
 // Esc закрывает модалку
@@ -5708,7 +6390,7 @@ function runBarChartForCard(card: VizCard) {
   canvas.addEventListener("mousemove", onMove);
   canvas.addEventListener("mouseleave", onLeave);
 
-   // ---------- Значок bad rows ----------
+  // ---------- Значок bad rows ----------
   const errorsCount = stats.nulls + stats.nans + stats.nonNumeric;
   const issuesHandle = el ? createIssuesBadge(el, card.id) : null;
   issuesHandle?.update(errorsCount, 0);
@@ -5806,6 +6488,35 @@ document.querySelectorAll(".panel-collapse-btn").forEach((btn) => {
     btn.setAttribute("title", isCollapsed ? "Развернуть" : "Свернуть");
   });
 });
+
+// ============================================================
+// ГЛОБАЛЬНЫЙ ПЕРЕХВАТ DRAG'А
+// ============================================================
+//
+// Нативный HTML5 drag нужен только элементам списка колонок
+// (для переноса в drop-зоны настроек). Всё остальное — тулбар,
+// прогресс-бары, карточки, панели — должно игнорировать drag.
+//
+// CSS уже делает это через -webkit-user-drag: none, но добавляем
+// JS-страховку: на случай платформ, где CSS не срабатывает
+// (старые браузеры, WebKit-вариации) — принудительно отменяем
+// dragstart для всех элементов, кроме колонок.
+
+document.addEventListener(
+  "dragstart",
+  (e) => {
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+
+    // Разрешаем drag только для элементов списка колонок
+    if (target.closest('.columns-list li[draggable="true"]')) return;
+
+    e.preventDefault();
+  },
+  true, // capture-фаза: срабатывает раньше любых пользовательских
+  // обработчиков, поэтому никакой drag из тулбара/карточек
+  // уже не проскочит
+);
 
 // ============================================================
 // СТАРТ

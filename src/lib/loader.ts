@@ -319,6 +319,49 @@ function isOrdinalString(values: string[]): boolean {
   return false;
 }
 
+/**
+ * Упорядочивает значения по естественной шкале ordinal-словаря.
+ *
+ * Возвращает массив уникальных значений (в оригинальной форме),
+ * отсортированный согласно порядку из `ORDINAL_VOCABULARIES`.
+ * Если ни один словарь не подходит — возвращает null.
+ *
+ * Используется в grouped-визуализациях, чтобы категории ordinal-колонок
+ * шли как Bronze → Silver → Gold → Platinum, а не по частоте.
+ */
+export function orderOrdinalValues(values: string[]): string[] | null {
+  if (values.length === 0) return null;
+
+  const uniq = Array.from(
+    new Set(values.map((v) => v.trim()).filter((v) => v !== "")),
+  );
+  if (uniq.length === 0 || uniq.length > 15) return null;
+
+  for (const vocab of ORDINAL_VOCABULARIES) {
+    const vocabArr = Array.from(vocab);
+    const idxByValue = new Map<string, number>();
+    for (let i = 0; i < vocabArr.length; i++) {
+      idxByValue.set(vocabArr[i], i);
+    }
+
+    let allMatch = true;
+    for (const v of uniq) {
+      if (!idxByValue.has(v.toLowerCase())) {
+        allMatch = false;
+        break;
+      }
+    }
+    if (!allMatch) continue;
+
+    return [...uniq].sort((a, b) => {
+      const ia = idxByValue.get(a.toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
+      const ib = idxByValue.get(b.toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
+      return ia - ib;
+    });
+  }
+  return null;
+}
+
 function inferColumnTypes(
   headers: string[],
   rows: (string | number | null | Date)[][],

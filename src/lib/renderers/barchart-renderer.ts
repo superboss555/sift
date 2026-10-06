@@ -22,7 +22,7 @@ export interface BarChartDrawOptions {
   /** Прогресс: сколько обработано из скольких. */
   processed?: number;
   total?: number;
-    outOfBuckets?: number;
+  outOfBuckets?: number;
 }
 
 export interface BarChartHitInfo {
@@ -63,7 +63,7 @@ export class BarChartRenderer {
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-    draw(data: BarChartData | null, opts: BarChartDrawOptions = {}) {
+  draw(data: BarChartData | null, opts: BarChartDrawOptions = {}) {
     const W = this.canvas.clientWidth;
     const H = this.canvas.clientHeight;
     const ctx = this.ctx;
@@ -71,8 +71,7 @@ export class BarChartRenderer {
 
     const showGrid = opts.showGrid !== false;
     const showAxisLabels = opts.showAxisLabels !== false;
-    const precision =
-      typeof opts.precision === "number" ? opts.precision : 0;
+    const precision = typeof opts.precision === "number" ? opts.precision : 0;
 
     const AXIS_FONT = "12px -apple-system, sans-serif";
     const AXIS_COLOR = "#000000";
@@ -106,7 +105,16 @@ export class BarChartRenderer {
     }
 
     const padR = 18;
-    const padT = 18;
+
+    // ---- Резерв места сверху под легенду ----
+    const hasLegend = !!opts.legendText;
+    const LEGEND_FONT = "11px -apple-system, sans-serif";
+    const LEGEND_SWATCH = 11;
+    const LEGEND_PAD = 8;
+    const LEGEND_H = hasLegend ? 22 : 0;
+    const LEGEND_GAP = hasLegend ? 6 : 0;
+
+    const padT = 18 + LEGEND_H + LEGEND_GAP;
 
     const axisXLabelH = opts.xLabel ? 20 : 0;
      const padB = 12 + 14 + 6 + axisXLabelH + 10 + 12;
@@ -231,62 +239,58 @@ export class BarChartRenderer {
       ctx.restore();
     }
 
-    // ---- Легенда ----
-    if (opts.legendText) {
-      const legendFont = "11px -apple-system, sans-serif";
-      ctx.font = legendFont;
+    // ---- Легенда (НАД plot area, не перекрывает данные) ----
+    if (hasLegend && opts.legendText) {
+      ctx.font = LEGEND_FONT;
       const textW = ctx.measureText(opts.legendText).width;
-      const legendH = 22;
-      const legendPad = 8;
-      const swatchSize = 11;
-      const legendW = legendPad * 2 + swatchSize + 6 + textW;
-      const legendX = padL + plotW - legendW - 6;
-      const legendY = padT + 6;
+      const legendW = LEGEND_PAD * 2 + LEGEND_SWATCH + 6 + textW;
+      const legendX = padL + plotW - legendW;
+      const legendY = 8;
 
       ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
       ctx.strokeStyle = "#d8dde3";
       ctx.lineWidth = 1;
       ctx.beginPath();
       if (typeof (ctx as any).roundRect === "function") {
-        (ctx as any).roundRect(legendX, legendY, legendW, legendH, 4);
+        (ctx as any).roundRect(legendX, legendY, legendW, LEGEND_H, 4);
       } else {
-        ctx.rect(legendX, legendY, legendW, legendH);
+        ctx.rect(legendX, legendY, legendW, LEGEND_H);
       }
       ctx.fill();
       ctx.stroke();
 
-      const swatchY = legendY + (legendH - swatchSize) / 2;
-      const swatchX = legendX + legendPad;
+      const swatchY = legendY + (LEGEND_H - LEGEND_SWATCH) / 2;
+      const swatchX = legendX + LEGEND_PAD;
       const swatchGrad = ctx.createLinearGradient(
         padL,
         0,
-        padL + swatchSize,
+        padL + LEGEND_SWATCH,
         0,
       );
       swatchGrad.addColorStop(0, accent);
       swatchGrad.addColorStop(1, accentDark);
       ctx.fillStyle = swatchGrad;
-      ctx.fillRect(swatchX, swatchY, swatchSize, swatchSize);
+      ctx.fillRect(swatchX, swatchY, LEGEND_SWATCH, LEGEND_SWATCH);
       ctx.strokeStyle = accentDark;
       ctx.strokeRect(
         swatchX + 0.5,
         swatchY + 0.5,
-        swatchSize - 1,
-        swatchSize - 1,
+        LEGEND_SWATCH - 1,
+        LEGEND_SWATCH - 1,
       );
 
       ctx.fillStyle = "#334155";
-      ctx.font = legendFont;
+      ctx.font = LEGEND_FONT;
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
       ctx.fillText(
         opts.legendText,
-        swatchX + swatchSize + 6,
-        legendY + legendH / 2,
+        swatchX + LEGEND_SWATCH + 6,
+        legendY + LEGEND_H / 2,
       );
     }
 
-        // ============================================================
+    // ============================================================
     // Σ, полоса прогресса, процент
     // ============================================================
     const processed = opts.processed ?? total;
@@ -310,7 +314,7 @@ export class BarChartRenderer {
       H - 6,
     );
 
-       // Σ — сумма отрисованных / общее число обработанных — слева
+    // Σ — сумма отрисованных / общее число обработанных — слева
     ctx.textAlign = "left";
     const sumText = `Σ ${total.toLocaleString("ru-RU")} / ${totalRows.toLocaleString("ru-RU")}`;
     ctx.fillStyle = total === totalRows ? "#16a34a" : "#dc2626";

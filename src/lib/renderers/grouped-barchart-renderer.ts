@@ -94,7 +94,15 @@ export class GroupedBarChartRenderer {
     }
 
     const padR = 18;
-    const padT = 18;
+
+    // ---- Резерв места сверху под легенду серий ----
+    const hasSeries =
+      opts.showLegend !== false && opts.seriesNames.length > 0;
+    const LEGEND_FONT = "11px -apple-system, sans-serif";
+    const LEGEND_H = hasSeries ? opts.seriesNames.length * 16 + 10 : 0;
+    const LEGEND_GAP = hasSeries ? 6 : 0;
+
+    const padT = 18 + LEGEND_H + LEGEND_GAP;
     const axisXLabelH = opts.xLabel ? 20 : 0;
     // Снизу — тики X + название оси + прогресс-бар
     const padB = 6 + 14 + 6 + axisXLabelH + 6 + 12;
@@ -242,27 +250,25 @@ export class GroupedBarChartRenderer {
       ctx.restore();
     }
 
-    // Легенда серий
-    if (opts.showLegend !== false && opts.seriesNames.length > 0) {
-      const legendFont = "11px -apple-system, sans-serif";
-      ctx.font = legendFont;
-      const legendH = opts.seriesNames.length * 16 + 10;
+    // Легенда серий — НАД plot area, не перекрывает данные
+    if (hasSeries) {
+      ctx.font = LEGEND_FONT;
       let legendW = 0;
       for (const s of opts.seriesNames) {
         const w = ctx.measureText(s).width + 20;
         if (w > legendW) legendW = w;
       }
-      const legendX = padL + plotW - legendW - 6;
-      const legendY = padT + 6;
+      const legendX = padL + plotW - legendW;
+      const legendY = 8;
 
       ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
       ctx.strokeStyle = "#d8dde3";
       ctx.lineWidth = 1;
       ctx.beginPath();
       if (typeof (ctx as any).roundRect === "function") {
-        (ctx as any).roundRect(legendX, legendY, legendW, legendH, 4);
+        (ctx as any).roundRect(legendX, legendY, legendW, LEGEND_H, 4);
       } else {
-        ctx.rect(legendX, legendY, legendW, legendH);
+        ctx.rect(legendX, legendY, legendW, LEGEND_H);
       }
       ctx.fill();
       ctx.stroke();

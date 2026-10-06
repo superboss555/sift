@@ -57,7 +57,7 @@ export class HistogramRenderer {
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-    draw(state: HistogramChunkResult | null, opts: HistogramDrawOptions = {}) {
+  draw(state: HistogramChunkResult | null, opts: HistogramDrawOptions = {}) {
     const W = this.canvas.clientWidth;
     const H = this.canvas.clientHeight;
     const ctx = this.ctx;
@@ -65,8 +65,7 @@ export class HistogramRenderer {
 
     const showGrid = opts.showGrid !== false;
     const showAxisLabels = opts.showAxisLabels !== false;
-    const precision =
-      typeof opts.precision === "number" ? opts.precision : 0;
+    const precision = typeof opts.precision === "number" ? opts.precision : 0;
 
     const AXIS_FONT = "12px -apple-system, sans-serif";
     const AXIS_COLOR = "#000000";
@@ -99,7 +98,18 @@ export class HistogramRenderer {
     }
 
     const padR = 18;
-    const padT = 18;
+
+    // ---- Резерв места сверху под легенду ----
+    // Легенда рисуется НАД plot area, чтобы не перекрывать данные.
+    // Если легенда не задана — отступ остаётся прежним (18).
+    const hasLegend = !!opts.legendText;
+    const legendFont = "11px -apple-system, sans-serif";
+    const legendSwatchSize = 11;
+    const legendPad = 8;
+    const legendH = hasLegend ? 22 : 0;
+    const legendGap = hasLegend ? 6 : 0;
+
+    const padT = 18 + legendH + legendGap;
 
     // ---- X-подписи: бины + подпись оси X ----
     const hasBinLabels =
@@ -116,7 +126,7 @@ export class HistogramRenderer {
       binLabelH = Math.ceil(maxLabelW);
     }
 
-       const axisXLabelH = opts.xLabel ? 20 : 0;
+    const axisXLabelH = opts.xLabel ? 20 : 0;
 
     // Зазор между бинами и подписью оси X.
     // Пока бины показываются, между ними и подписью нужно минимум
@@ -251,7 +261,7 @@ export class HistogramRenderer {
       }
     }
 
-        // ---- Название оси X ----
+    // ---- Название оси X ----
     // Поднимаем на 22px, чтобы не пересекаться с Σ и ⚠ внизу
     if (opts.xLabel) {
       ctx.fillStyle = AXIS_COLOR;
@@ -276,17 +286,14 @@ export class HistogramRenderer {
       ctx.restore();
     }
 
-    // ---- Легенда ----
-    if (opts.legendText) {
-      const legendFont = "11px -apple-system, sans-serif";
+    // ---- Легенда (рисуется НАД plot area, не перекрывает данные) ----
+    if (opts.legendText && hasLegend) {
       ctx.font = legendFont;
       const textW = ctx.measureText(opts.legendText).width;
-      const legendH = 22;
-      const legendPad = 8;
-      const swatchSize = 11;
-      const legendW = legendPad * 2 + swatchSize + 6 + textW;
-      const legendX = padL + plotW - legendW - 6;
-      const legendY = padT + 6;
+      const legendW = legendPad * 2 + legendSwatchSize + 6 + textW;
+      // Выравниваем легенду по правому краю plot area
+      const legendX = padL + plotW - legendW;
+      const legendY = 8; // верх canvas, над plot area
 
       ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
       ctx.strokeStyle = "#d8dde3";
@@ -300,24 +307,24 @@ export class HistogramRenderer {
       ctx.fill();
       ctx.stroke();
 
-      const swatchY = legendY + (legendH - swatchSize) / 2;
+      const swatchY = legendY + (legendH - legendSwatchSize) / 2;
       const swatchX = legendX + legendPad;
       const swatchGrad = ctx.createLinearGradient(
         0,
         swatchY,
         0,
-        swatchY + swatchSize,
+        swatchY + legendSwatchSize,
       );
       swatchGrad.addColorStop(0, accent);
       swatchGrad.addColorStop(1, accentDark);
       ctx.fillStyle = swatchGrad;
-      ctx.fillRect(swatchX, swatchY, swatchSize, swatchSize);
+      ctx.fillRect(swatchX, swatchY, legendSwatchSize, legendSwatchSize);
       ctx.strokeStyle = accentDark;
       ctx.strokeRect(
         swatchX + 0.5,
         swatchY + 0.5,
-        swatchSize - 1,
-        swatchSize - 1,
+        legendSwatchSize - 1,
+        legendSwatchSize - 1,
       );
 
       ctx.fillStyle = "#334155";
@@ -326,7 +333,7 @@ export class HistogramRenderer {
       ctx.textBaseline = "middle";
       ctx.fillText(
         opts.legendText,
-        swatchX + swatchSize + 6,
+        swatchX + legendSwatchSize + 6,
         legendY + legendH / 2,
       );
     }
