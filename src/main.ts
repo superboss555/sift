@@ -1,6 +1,10 @@
 import "./styles.css";
 
-import { loadFile, type ParsedData } from "./lib/loader.js";
+import {
+  loadFile,
+  type ParsedData,
+  type ColumnType,
+} from "./lib/loader.js";
 import { collectMemoryStats, formatBytes } from "./lib/memory.js";
 import {
   saveSession,
@@ -245,6 +249,28 @@ let currentFileName = "";
 let selectedColumnIndex: number | null = null;
 let vizScreenInitialized = false;
 
+// ---- Сортировка списка колонок ----
+//
+// "original"   — в порядке файла (по умолчанию)
+// "az" / "za"  — по имени
+// "type-asc"   — по группе типа, внутри группы A-Z
+// "type-desc"  — по группе типа в обратном порядке, внутри группы Z-A
+type ColumnsSortMode = "original" | "az" | "za" | "type-asc" | "type-desc";
+
+let columnsSortMode: ColumnsSortMode = "original";
+
+/** Канонический порядок типов для режима "по типу". */
+const COLUMN_TYPE_ORDER: ColumnType["type"][] = [
+  "numeric",
+  "ordinal",
+  "boolean",
+  "date",
+  "datetime",
+  "string",
+  "mixed",
+  "empty",
+];
+
 // ============================================================
 // ЗАГРУЗКА ФАЙЛА
 // ============================================================
@@ -314,6 +340,14 @@ newFileBtn.addEventListener("click", async () => {
   await clearVizState();
   resetVizOptions();
   vizScreenInitialized = false;
+
+  // Сбрасываем сортировку колонок — новый датасет, старые настройки
+  // не имеют смысла
+  columnsSortMode = "original";
+  const sortSelect = document.getElementById(
+    "columns-sort-select",
+  ) as HTMLSelectElement | null;
+  if (sortSelect) sortSelect.value = "original";
 
   currentFileBar.style.display = "none";
   dropZone.style.display = "";
@@ -877,9 +911,13 @@ togglePanelsBtn.addEventListener("click", () => {
 function renderColumnsList() {
   if (!currentData) return;
 
-  columnsList.innerHTML = currentData.columnTypes
+  ensureColumnsToolbar();
+
+  const sorted = sortColumnEntries(currentData.columnTypes);
+
+  columnsList.innerHTML = sorted
     .map(
-      (ct, idx) => `
+      ({ ct, idx }) => `
         <li data-index="${idx}" class="${ct.type}">
             ${escapeHtml(ct.name)}
         </li>
@@ -901,9 +939,89 @@ function renderColumnsList() {
     li.addEventListener("click", () => {
       selectColumn(idx);
     });
+
+    // Восстанавливаем выделение после пересортировки
+    if (selectedColumnIndex !== null && idx === selectedColumnIndex) {
+      li.classList.add("selected");
+    }
   });
 
   updateColumnsAvailability();
+}
+
+/**
+ * Возвращает массив { ct, idx } в порядке, заданном columnsSortMode.
+ * idx — исходный индекс в currentData.columnTypes, нужен для
+ * drag-and-drop и валидации совместимости.
+ */
+function sortColumnEntries(
+  columnTypes: ColumnType[],
+): { ct: ColumnType; idx: number }[] {
+  const items = columnTypes.map((ct, idx) => ({ ct, idx }));
+  if (columnsSortMode === "original") return items;
+
+  const cmpRu = (a: string, b: string) => a.localeCompare(b, "ru");
+  const arr = [...items];
+
+  switch (columnsSortMode) {
+    case "az":
+      arr.sort((a, b) => cmpRu(a.ct.name, b.ct.name));
+      break;
+
+    case "za":
+      arr.sort((a, b) => cmpRu(b.ct.name, a.ct.name));
+      break;
+
+    case "type-asc":
+    case "type-desc": {
+      // Порядок ГРУПП типов всегда одинаковый (numeric → ordinal → ...).
+      // Меняется только направление сортировки имён ВНУТРИ группы.
+      const nameDir = columnsSortMode === "type-asc" ? 1 : -1;
+      arr.sort((a, b) => {
+        const ai = COLUMN_TYPE_ORDER.indexOf(a.ct.type);
+        const bi = COLUMN_TYPE_ORDER.indexOf(b.ct.type);
+        if (ai !== bi) return ai - bi;                 // порядок групп фиксирован
+        return cmpRu(a.ct.name, b.ct.name) * nameDir;  // направление имён
+      });
+      break;
+    }
+  }
+
+  return arr;
+}
+
+// ------------------------------------------------------------
+// ТУЛБАР СОРТИРОВКИ НАД СПИСКОМ КОЛОНОК
+// ------------------------------------------------------------
+
+function ensureColumnsToolbar(): void {
+  if (document.getElementById("columns-toolbar")) return;
+
+  const toolbar = document.createElement("div");
+  toolbar.id = "columns-toolbar";
+  toolbar.className = "columns-toolbar";
+  toolbar.innerHTML = `
+    <select class="columns-sort-select" id="columns-sort-select"
+            title="Сортировка списка колонок">
+      <option value="original">Исходный</option>
+      <option value="az">A → Я</option>
+      <option value="za">Я → A</option>
+      <option value="type-asc">По типу ↑</option>
+      <option value="type-desc">По типу ↓</option>
+    </select>
+  `;
+
+  columnsList.parentElement?.insertBefore(toolbar, columnsList);
+
+  const select = toolbar.querySelector(
+    "#columns-sort-select",
+  ) as HTMLSelectElement;
+  select.value = columnsSortMode;
+
+  select.addEventListener("change", () => {
+    columnsSortMode = select.value as ColumnsSortMode;
+    renderColumnsList();
+  });
 }
 
 function selectColumn(index: number) {
@@ -1010,9 +1128,8 @@ const VIZ_OPTIONS: VizOption[] = [
     id: "histogram-grouped",
     label: "С накоплением",
     defaultTitle: "Гистограмма с группировкой",
-    // Карточке нужны оба типа: numeric (значения) + string (группировка).
-    // Поэтому в columns-list подсвечиваем и те, и другие как совместимые.
-    types: ["numeric", "string", "mixed"],
+    // Карточке нужны оба типа: numeric (значения) + категориальный (группировка).
+    types: ["numeric", "string", "mixed", "boolean", "date", "datetime", "ordinal"],
     section: "histogram",
     enabled: true,
     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1057,7 +1174,7 @@ const VIZ_OPTIONS: VizOption[] = [
     id: "barchart-grouped",
     label: "С накоплением",
     defaultTitle: "Линейчатая с группировкой",
-    types: ["numeric", "string", "mixed"],
+    types: ["numeric", "string", "mixed", "boolean", "date", "datetime", "ordinal"],
     section: "barchart",
     enabled: true,
     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1087,7 +1204,7 @@ const VIZ_OPTIONS: VizOption[] = [
   {
     id: "piechart",
     label: "Круговая",
-    types: ["string", "mixed"],
+    types: ["string", "mixed", "boolean", "date", "datetime", "ordinal"],
     section: "other",
     enabled: true,
     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -2783,7 +2900,7 @@ function renderSettingsContent(cardId: string) {
           <label class="settings-label">Группировка (категориальная колонка)</label>
           <div class="settings-dropzone"
                data-dropzone="1"
-               data-expected-type="string">
+               data-expected-type="categorical">
             ${renderSlotContent(slot1, 1)}
           </div>
         </div>
@@ -2811,10 +2928,10 @@ function renderSettingsContent(cardId: string) {
     } else if (card.vizId === "piechart") {
       dataSlotsHtml = `
         <div class="settings-slot">
-          <label class="settings-label">Категории (строковая колонка)</label>
+          <label class="settings-label">Категории (категориальная колонка)</label>
           <div class="settings-dropzone"
                data-dropzone="0"
-               data-expected-type="string">
+               data-expected-type="categorical">
             ${renderSlotContent(slot0, 0)}
           </div>
         </div>
@@ -2904,14 +3021,17 @@ data-tooltip="Крайние значения диапазона входят в
             <span class="settings-label">
               Количество бинов<span
                 class="info-icon"
-                data-tooltip="Бины – интервалы, на которые делится диапазон значений. Больше бинов – детальнее гистограмма, но заметнее шум. Меньше бинов – более гладкая форма распределения."
+                data-tooltip="Бины – интервалы, на которые делится диапазон значений. Больше бинов – детальнее гистограмма, но заметнее шум. Для распределений с длинным хвостом (выручка, цены) попробуйте 80–150 бинов или «С диапазонами»."
                 >?</span
               >
             </span>
-            <span class="settings-value" data-bins-value>${s.bins}</span>
+            <input type="number" class="settings-number-inline"
+                   data-bins-number
+                   min="5" max="200" step="1"
+                   value="${s.bins}" />
           </div>
           <input type="range" class="settings-range"
-                 data-setting="bins"
+                 data-bins-range
                  min="5" max="200" step="1"
                  value="${s.bins}" />
         </div>
@@ -2929,10 +3049,13 @@ data-tooltip="Крайние значения диапазона входят в
                 >?</span
               >
             </span>
-            <span class="settings-value" data-precision-value>${s.precision}</span>
+            <input type="number" class="settings-number-inline"
+                   data-precision-number
+                   min="0" max="5" step="1"
+                   value="${s.precision}" />
           </div>
           <input type="range" class="settings-range"
-                 data-setting="precision"
+                 data-precision-range
                  min="0" max="5" step="1"
                  value="${s.precision}" />
         </div>
@@ -3076,32 +3199,122 @@ data-tooltip="Крайние значения диапазона входят в
     });
   }
 
-  // ---------- Бины ----------
-  const binsInput = settingsContent.querySelector(
-    '[data-setting="bins"]',
-  ) as HTMLInputElement | null;
-  if (binsInput) {
-    binsInput.addEventListener("input", () => {
-      s.bins = Number(binsInput.value);
-      const lbl = settingsContent.querySelector("[data-bins-value]");
-      if (lbl) lbl.textContent = String(s.bins);
+  // ---------- Бины (slider + number) ----------
+  //
+  // Диапазон 5..200. Пока пользователь печатает, не клэмпим —
+  // иначе нельзя набрать «150» (после «1» поле бы обрезалось до 5).
+  // Клэмпинг происходит на blur/Enter.
+  const BINS_MIN = 5;
+  const BINS_MAX = 200;
+
+  const binsRange = settingsContent.querySelector<HTMLInputElement>(
+    "[data-bins-range]",
+  );
+  const binsNumber = settingsContent.querySelector<HTMLInputElement>(
+    "[data-bins-number]",
+  );
+
+  const clampBins = (n: number): number => {
+    if (!Number.isFinite(n)) return s.bins;
+    return Math.max(BINS_MIN, Math.min(BINS_MAX, Math.round(n)));
+  };
+  const syncBinsInputs = (n: number) => {
+    if (binsRange) binsRange.value = String(n);
+    if (binsNumber) binsNumber.value = String(n);
+  };
+
+  if (binsRange) {
+    binsRange.addEventListener("input", () => {
+      const n = clampBins(Number(binsRange.value));
+      s.bins = n;
+      if (binsNumber) binsNumber.value = String(n);
     });
-    binsInput.addEventListener("change", () => {
+    binsRange.addEventListener("change", () => {
       syncCardVisual(card);
     });
   }
 
-  // ---------- Точность ----------
-  const precisionInput = settingsContent.querySelector(
-    '[data-setting="precision"]',
-  ) as HTMLInputElement | null;
-  if (precisionInput) {
-    precisionInput.addEventListener("input", () => {
-      s.precision = Math.max(0, Math.min(5, Number(precisionInput.value)));
-      const lbl = settingsContent.querySelector("[data-precision-value]");
-      if (lbl) lbl.textContent = String(s.precision);
+  if (binsNumber) {
+    binsNumber.addEventListener("input", () => {
+      const raw = binsNumber.value.trim();
+      if (raw === "") return; // пусто — ждём, пока пользователь допечатает
+      const n = Number(raw);
+      if (Number.isFinite(n) && n >= BINS_MIN && n <= BINS_MAX) {
+        s.bins = Math.round(n);
+        if (binsRange) binsRange.value = String(s.bins);
+      }
+    });
+    const commitBins = () => {
+      const n = clampBins(Number(binsNumber.value));
+      s.bins = n;
+      syncBinsInputs(n);
+      syncCardVisual(card);
+    };
+    binsNumber.addEventListener("blur", commitBins);
+    binsNumber.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        binsNumber.blur();
+      }
+    });
+  }
+
+  // ---------- Точность (slider + number) ----------
+  const PRECISION_MIN = 0;
+  const PRECISION_MAX = 5;
+
+  const precisionRange = settingsContent.querySelector<HTMLInputElement>(
+    "[data-precision-range]",
+  );
+  const precisionNumber = settingsContent.querySelector<HTMLInputElement>(
+    "[data-precision-number]",
+  );
+
+  const clampPrecision = (n: number): number => {
+    if (!Number.isFinite(n)) return s.precision;
+    return Math.max(PRECISION_MIN, Math.min(PRECISION_MAX, Math.round(n)));
+  };
+  const syncPrecisionInputs = (n: number) => {
+    if (precisionRange) precisionRange.value = String(n);
+    if (precisionNumber) precisionNumber.value = String(n);
+  };
+
+  if (precisionRange) {
+    precisionRange.addEventListener("input", () => {
+      const n = clampPrecision(Number(precisionRange.value));
+      s.precision = n;
+      if (precisionNumber) precisionNumber.value = String(n);
+      redrawActive(card);
+    });
+    precisionRange.addEventListener("change", () => {
+      scheduleSaveVizState();
+    });
+  }
+
+  if (precisionNumber) {
+    precisionNumber.addEventListener("input", () => {
+      const raw = precisionNumber.value.trim();
+      if (raw === "") return;
+      const n = Number(raw);
+      if (Number.isFinite(n) && n >= PRECISION_MIN && n <= PRECISION_MAX) {
+        s.precision = Math.round(n);
+        if (precisionRange) precisionRange.value = String(s.precision);
+        redrawActive(card);
+      }
+    });
+    const commitPrecision = () => {
+      const n = clampPrecision(Number(precisionNumber.value));
+      s.precision = n;
+      syncPrecisionInputs(n);
       redrawActive(card);
       scheduleSaveVizState();
+    };
+    precisionNumber.addEventListener("blur", commitPrecision);
+    precisionNumber.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        precisionNumber.blur();
+      }
     });
   }
 
@@ -3343,7 +3556,15 @@ function setupDropzone(dropzone: HTMLElement, card: VizCard, slotIndex: 0 | 1) {
         reject();
         return;
       }
-      if (slotIndex === 1 && ct.type !== "string" && ct.type !== "mixed") {
+      if (
+        slotIndex === 1 &&
+        ct.type !== "string" &&
+        ct.type !== "mixed" &&
+        ct.type !== "boolean" &&
+        ct.type !== "date" &&
+        ct.type !== "datetime" &&
+        ct.type !== "ordinal"
+      ) {
         reject();
         return;
       }
@@ -4912,7 +5133,7 @@ function runGroupedHistogramForCard(card: VizCard) {
   const redraw = () => {
     const run = runningGroupedHistograms.get(card.id);
     const state = run?.lastState ?? null;
-    
+
     renderer.draw(state, {
       xLabel: getXLabel(),
       yLabel: getYLabel(),

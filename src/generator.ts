@@ -73,7 +73,14 @@ const CATEGORIES = [
 const CATEGORY_WEIGHTS = [0.18, 0.22, 0.2, 0.1, 0.08, 0.06, 0.08, 0.08];
 
 const PRODUCTS: Record<string, string[]> = {
-  Электроника: ["Смартфон", "Ноутбук", "Наушники", "Планшет", "Телевизор", "Умные часы"],
+  Электроника: [
+    "Смартфон",
+    "Ноутбук",
+    "Наушники",
+    "Планшет",
+    "Телевизор",
+    "Умные часы",
+  ],
   Одежда: ["Куртка", "Джинсы", "Футболка", "Платье", "Свитер", "Кроссовки"],
   Продукты: ["Хлеб", "Молоко", "Сыр", "Кофе", "Чай", "Шоколад", "Масло"],
   Книги: ["Роман", "Учебник", "Детектив", "Фантастика", "Биография"],
@@ -142,13 +149,49 @@ const DELIVERY_BY_REGION: Record<string, [number, number]> = {
   Другие: [5, 14],
 };
 
+/** Ordinal: уровень лояльности, зависит от сегмента клиента. */
+const LOYALTY_BY_SEGMENT: Record<string, string[]> = {
+  Новый: ["Bronze", "Silver"],
+  Постоянный: ["Silver", "Gold"],
+  VIP: ["Gold", "Platinum"],
+  Ушедший: ["Bronze", "Silver", "Gold"],
+};
+
+/** Ordinal: предпочтительный размер (только для одежды). */
+const SIZE_OPTIONS = ["XS", "S", "M", "L", "XL"];
+
+/** Склад: координаты городов. */
+const WAREHOUSE_COORDS: Record<string, [number, number]> = {
+  Москва: [55.7558, 37.6173],
+  "Санкт-Петербург": [59.9343, 30.3351],
+  Новосибирск: [55.0084, 82.9357],
+  Екатеринбург: [56.8389, 60.6057],
+  Казань: [55.8304, 49.0661],
+  Краснодар: [45.0355, 38.9753],
+  Другие: [53.1959, 50.1002],
+};
+
+/** Хелпер: ISO-дата + N дней. */
+function addDays(isoDate: string, days: number): string {
+  const d = new Date(isoDate);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 // ============================================================
 // ГЕНЕРАЦИЯ СТРОК
 // ============================================================
 
 interface SaleRow {
   order_id: string;
-  order_date: string;
+
+  // ---- Временные метки ----
+  order_datetime: string; // "2024-03-15T14:30:00"
+  order_date: string; // "2024-03-15"
+  preferred_delivery_date: string | null; // "2024-03-18" или null
+  customer_since: string; // дата первого заказа клиента
+
+  // ---- Категориальные ----
   region: string;
   city: string;
   category: string;
@@ -157,6 +200,12 @@ interface SaleRow {
   channel: string;
   payment_method: string;
   customer_segment: string;
+
+  // ---- Ordinal (упорядоченные категории) ----
+  loyalty_tier: "Bronze" | "Silver" | "Gold" | "Platinum";
+  preferred_size: "XS" | "S" | "M" | "L" | "XL" | null;
+
+  // ---- Числовые ----
   customer_age: number;
   customer_rating: number | null;
   quantity: number;
@@ -167,6 +216,20 @@ interface SaleRow {
   profit: number;
   delivery_days: number | null;
   delivery_rating: number | null;
+  customer_tenure_days: number; // duration
+  session_duration_sec: number; // duration
+
+  // ---- Гео-координаты ----
+  warehouse_lat: number;
+  warehouse_lon: number;
+
+  // ---- Булевы ----
+  has_discount: boolean;
+  is_promo: boolean;
+  is_gift: boolean;
+  subscription_active: boolean;
+
+  // ---- Категориальное бинарное ----
   is_returned: "Yes" | "No";
 }
 
@@ -182,7 +245,9 @@ function generateRows(opts: GenOptions): SaleRow[] {
 
   const startDate = new Date(Date.UTC(2024, 0, 1));
   const dayCount = 730;
-  const monthWeights = [0.7, 0.7, 0.9, 1.0, 1.0, 1.0, 1.0, 0.9, 1.1, 1.2, 1.8, 2.5];
+  const monthWeights = [
+    0.7, 0.7, 0.9, 1.0, 1.0, 1.0, 1.0, 0.9, 1.1, 1.2, 1.8, 2.5,
+  ];
   const dayWeights = new Array(dayCount);
   for (let i = 0; i < dayCount; i++) {
     const d = new Date(startDate);
@@ -219,9 +284,54 @@ function generateRows(opts: GenOptions): SaleRow[] {
     const payment = weightedPick(rng, PAYMENT_METHODS, PAYMENT_WEIGHTS);
     const segment = weightedPick(rng, SEGMENTS, SEGMENT_WEIGHTS);
 
+    // ---- Datetime: случайный час/минута внутри дня ----
+    const dt = new Date(date);
+    dt.setUTCHours(
+      Math.floor(rng() * 24),
+      Math.floor(rng() * 60),
+      Math.floor(rng() * 60),
+      0,
+    );
+    const isoDatetime = dt.toISOString().slice(0, 19);
+
+    // ---- Preferred delivery date: +1..14 дней, иногда null ----
+    let preferredDeliveryDate: string | null = null;
+    if (rng() > opts.missingRate * 0.4) {
+      preferredDeliveryDate = addDays(isoDate, 1 + Math.floor(rng() * 14));
+    }
+
+    // ---- Customer since: от 0 до 2000 дней до заказа ----
+    const tenureDays = Math.floor(Math.pow(rng(), 1.4) * 2000);
+    const customerSince = addDays(isoDate, -tenureDays);
+
+    // ---- Ordinal: уровень лояльности ----
+    const loyaltyTiers = LOYALTY_BY_SEGMENT[segment];
+    const loyaltyTier = loyaltyTiers[Math.floor(rng() * loyaltyTiers.length)];
+
+    // ---- Ordinal: размер (только для одежды) ----
+    let preferredSize: string | null = null;
+    if (category === "Одежда") {
+      preferredSize = SIZE_OPTIONS[Math.floor(rng() * SIZE_OPTIONS.length)];
+    }
+
+    // ---- Geo: координаты склада региона ----
+    const [whLat, whLon] = WAREHOUSE_COORDS[region];
+
+    // ---- Булевы ----
+    const isPromo = rng() < 0.25;
+    const isGift = rng() < 0.08;
+    const subscriptionActive =
+      segment === "VIP"
+        ? rng() < 0.85
+        : segment === "Постоянный"
+          ? rng() < 0.4
+          : rng() < 0.1;
+
+    // ---- Duration: длительность сессии ----
+    const sessionDuration = 30 + Math.floor(Math.pow(rng(), 2) * 1200);
+
     const [ageMin, ageMax] = AGE_BY_SEGMENT[segment];
     const age = Math.floor(ageMin + rng() * (ageMax - ageMin + 1));
-
     let customerRating: number | null = null;
     if (rng() > opts.missingRate * 0.6) {
       const r = 3.8 + gaussian(rng) * 0.7;
@@ -235,10 +345,17 @@ function generateRows(opts: GenOptions): SaleRow[] {
 
     let discMax: number;
     switch (segment) {
-      case "VIP": discMax = 25; break;
-      case "Постоянный": discMax = 15; break;
-      case "Ушедший": discMax = 30; break;
-      default: discMax = 10;
+      case "VIP":
+        discMax = 25;
+        break;
+      case "Постоянный":
+        discMax = 15;
+        break;
+      case "Ушедший":
+        discMax = 30;
+        break;
+      default:
+        discMax = 10;
     }
     const discountPct = Math.floor(Math.pow(rng(), 1.8) * discMax);
 
@@ -267,7 +384,12 @@ function generateRows(opts: GenOptions): SaleRow[] {
 
     rows.push({
       order_id: `ORD-${String(i + 1).padStart(6, "0")}`,
+
+      order_datetime: isoDatetime,
       order_date: isoDate,
+      preferred_delivery_date: preferredDeliveryDate,
+      customer_since: customerSince,
+
       region,
       city,
       category,
@@ -276,6 +398,10 @@ function generateRows(opts: GenOptions): SaleRow[] {
       channel,
       payment_method: payment,
       customer_segment: segment,
+
+      loyalty_tier: loyaltyTier as SaleRow["loyalty_tier"],
+      preferred_size: preferredSize as SaleRow["preferred_size"],
+
       customer_age: age,
       customer_rating: customerRating,
       quantity,
@@ -286,6 +412,17 @@ function generateRows(opts: GenOptions): SaleRow[] {
       profit,
       delivery_days: deliveryDays,
       delivery_rating: deliveryRating,
+      customer_tenure_days: tenureDays,
+      session_duration_sec: sessionDuration,
+
+      warehouse_lat: whLat,
+      warehouse_lon: whLon,
+
+      has_discount: discountPct > 0,
+      is_promo: isPromo,
+      is_gift: isGift,
+      subscription_active: subscriptionActive,
+
       is_returned: isReturned,
     });
   }
@@ -299,7 +436,17 @@ function generateRows(opts: GenOptions): SaleRow[] {
 // ============================================================
 
 function rowsToSheet(rows: SaleRow[]): XLSX.WorkSheet {
-  return XLSX.utils.json_to_sheet(rows);
+  const serialized = rows.map((r) => {
+    const copy: Record<string, unknown> = { ...r };
+    for (const k of Object.keys(copy)) {
+      if (typeof copy[k] === "boolean") {
+        // Превращаем true/false в Yes/No, чтобы парсер мог определить тип boolean
+        copy[k] = copy[k] ? "Yes" : "No";
+      }
+    }
+    return copy;
+  });
+  return XLSX.utils.json_to_sheet(serialized);
 }
 
 function buildXlsxBuffer(rows: SaleRow[]): ArrayBuffer {
