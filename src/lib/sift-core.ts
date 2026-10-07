@@ -13,6 +13,41 @@ export type {
   GroupedHistogramChunkResult,
 };
 
+// ============================================================
+// РАСШИРЕНИЕ ТИПА WASM-МОДУЛЯ
+// ============================================================
+//
+// Методы Box Plot (P²) уже экспортированы из C++ через
+// EMSCRIPTEN_BINDINGS, но в сгенерированном sift_core.d.ts их
+// ещё нет, потому что модуль был собран до правок C++. Чтобы не
+// редактировать генерируемый файл (он перезапишется при следующей
+// сборке), расширяем тип SiftCoreModule здесь.
+//
+// Альтернатива: пересобрать WASM (тогда .d.ts сгенерируется заново
+// и этот блок можно удалить).
+
+declare module "../wasm/sift_core.js" {
+  interface SiftCoreModule {
+    initBoxPlot(dataPtr: number, length: number): number;
+    processBoxPlotChunk(
+      handle: number,
+      elements: number,
+    ): {
+      processed: number;
+      total: number;
+      q1: number;
+      median: number;
+      q3: number;
+      iqr: number;
+      min: number;
+      max: number;
+      count: number;
+      done: boolean;
+    };
+    freeBoxPlot(handle: number): void;
+  }
+}
+
 let corePromise: Promise<SiftCoreModule> | null = null;
 
 /** Один экземпляр WASM-модуля на всё приложение. */
@@ -410,6 +445,108 @@ export function runProgressiveBucketedHistogram(
       rafId = requestAnimationFrame(step);
     } catch (err) {
       console.error("[sift-core] ошибка bucketed histogram:", err);
+    }
+  })();
+
+  return {
+    cancel() {
+      if (cancelled) return;
+      cancelled = true;
+      cancelAnimationFrame(rafId);
+      cleanupFn?.();
+      cleanupFn = null;
+    },
+  };
+}
+
+// ============================================================
+// BOX PLOT (P²)
+// ============================================================
+
+export interface BoxPlotChunkResult {
+  processed: number;
+  total: number;
+  q1: number;
+  median: number;
+  q3: number;
+  iqr: number;
+  min: number;
+  max: number;
+  count: number;
+  done: boolean;
+  /** Границы усов (Q1 − 1.5·IQR и Q3 + 1.5·IQR). Валидны после done. */
+  upperFence: number;
+  lowerFence: number;
+  /** Полное число выбросов (может быть больше, чем реально переданных). */
+  upperOutlierCount: number;
+  lowerOutlierCount: number;
+  /** Сами значения выбросов (первые MAX_OUTLIERS = 500). */
+  upperOutliers: number[];
+  lowerOutliers: number[];
+}
+
+export interface BoxPlotHandle {
+  cancel: () => void;
+}
+
+export function runProgressiveBoxPlot(args: {
+  data: Float64Array;
+  onProgress: (state: BoxPlotChunkResult) => void;
+  onDone: (state: BoxPlotChunkResult) => void;
+}): BoxPlotHandle {
+  let cancelled = false;
+  let rafId = 0;
+  let cleanupFn: (() => void) | null = null;
+
+  void (async () => {
+    try {
+      const core = await getCore();
+      if (cancelled) return;
+
+      const { data, onProgress, onDone } = args;
+
+      const dataPtr = core.allocF64(data.length);
+      core.HEAPF64.set(data, dataPtr / 8);
+
+      const handle = core.initBoxPlot(dataPtr, data.length);
+
+      cleanupFn = () => {
+        core.freeBoxPlot(handle);
+        core.freeF64(dataPtr);
+      };
+
+      const CHUNK = 20000;
+
+      const step = () => {
+        if (cancelled) return;
+
+        let state: BoxPlotChunkResult;
+        try {
+          state = core.processBoxPlotChunk(
+            handle,
+            CHUNK,
+          ) as BoxPlotChunkResult;
+        } catch (err) {
+          console.error("[boxplot] chunk error:", err);
+          cleanupFn?.();
+          cleanupFn = null;
+          return;
+        }
+
+        onProgress(state);
+
+        if (state.done) {
+          cleanupFn?.();
+          cleanupFn = null;
+          onDone(state);
+        } else {
+          rafId = requestAnimationFrame(step);
+        }
+      };
+
+      rafId = requestAnimationFrame(step);
+    } catch (err) {
+      console.error("[sift-core] ошибка box plot:", err);
     }
   })();
 

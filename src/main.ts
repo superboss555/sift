@@ -19,6 +19,9 @@ import {
   runProgressiveBarChart,
   runProgressiveBucketedHistogram,
   runProgressiveGroupedHistogram,
+    runProgressiveBoxPlot,
+  type BoxPlotHandle,
+  type BoxPlotChunkResult,
   type HistogramHandle,
   type HistogramChunkResult,
   type BarChartHandle,
@@ -42,6 +45,8 @@ import {
 
 import { GroupedHistogramRenderer } from "./lib/renderers/grouped-histogram-renderer.js";
 import { GroupedBarChartRenderer } from "./lib/renderers/grouped-barchart-renderer.js";
+
+import { BoxPlotRenderer } from "./lib/renderers/box-plot-renderer.js";
 
 import {
   saveVizState,
@@ -907,17 +912,21 @@ nextBtn.addEventListener("click", () => {
   renderColumnsList();
 
   if (!vizScreenInitialized) {
-    // Первый переход на страницу 2 в этой сессии — сбрасываем состояние
+    // Первый переход на страницу 2 — сбрасываем состояние и создаём лист
     resetVizOptions();
     vizScreenInitialized = true;
   } else {
-    // Уже были здесь — карточки на месте, только обновим доступность колонок
+    // Уже были здесь — обновляем доступность колонок
     updateColumnsAvailability();
+  }
+
+  // Если по какой-то причине листов нет — создаём первый
+  if (sheets.length === 0) {
+    createSheet();
   }
 
   window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
 });
-
 backBtn.addEventListener("click", () => {
   pageVisualize.classList.remove("active");
   pageUpload.classList.add("active");
@@ -926,6 +935,7 @@ backBtn.addEventListener("click", () => {
 togglePanelsBtn.addEventListener("click", () => {
   const hidden = vizLayout.classList.toggle("panels-hidden");
   togglePanelsBtn.textContent = hidden ? "Показать панели" : "Скрыть панели";
+  scheduleSaveVizState();
 });
 
 // ============================================================
@@ -1371,6 +1381,7 @@ interface CardSettings {
 const DEFAULT_AXIS_LABELS: Record<string, [string, string]> = {
   histogram: ["Значения", "Частота"],
   barchart: ["", ""],
+  boxplot: ["Значения", ""],
 };
 
 function getAxisLabel(
@@ -1458,48 +1469,134 @@ function updateCardTitle(card: VizCard) {
 }
 
 // ============================================================
-// СОХРАНЕНИЕ И ВОССТАНОВЛЕНИЕ СОСТОЯНИЯ ВИЗУАЛИЗАЦИЙ
+// ТИПЫ И СОСТОЯНИЕ КАРТОЧЕК / ЛИСТОВ
 // ============================================================
+//
+// Объявления перенесены выше collectVizState / restoreVizState,
+// чтобы эти функции могли ссылаться на переменные до их фактического
+// места определения в файле.
+
+interface VizCard {
+  id: string;
+  vizId: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  settings: CardSettings;
+  /** Только для vizId === "legend": id диаграммы, к которой привязана легенда. */
+  linkedCardId?: string;
+}
+
+interface Sheet {
+  id: string;
+  name: string;
+  cards: VizCard[];
+  activeCardId: string | null;
+}
+
+interface SerializedSheet {
+  id: string;
+  name: string;
+  cards: any[]; // SerializedCard[]
+  activeCardId: string | null;
+}
+
+let vizCards: VizCard[] = [];
+let activeCardId: string | null = null;
+let cardCounter = 0;
+
+const legendBadges = new Map<string, LegendBadgeHandle>();
+
+let sheets: Sheet[] = [];
+let activeSheetId = "";
+const sheetLayers = new Map<string, HTMLElement>();
+let sheetCounter = 0;
+
+function getCurrentSheet(): Sheet | null {
+  return sheets.find((s) => s.id === activeSheetId) ?? null;
+}
+
+function ensureSheetLayer(sheetId: string): HTMLElement {
+  let layer = sheetLayers.get(sheetId);
+  if (layer && vizCanvas.contains(layer)) return layer;
+
+  layer = document.createElement("div");
+  layer.className = "viz-sheet-layer";
+  layer.dataset.sheetId = sheetId;
+  vizCanvas.appendChild(layer);
+  sheetLayers.set(sheetId, layer);
+  return layer;
+}
+
+function showSheetLayer(sheetId: string): void {
+  for (const [id, layer] of sheetLayers) {
+    layer.style.display = id === sheetId ? "" : "none";
+  }
+}
+
+// ============================================================
+// СЕРИАЛИЗАЦИЯ КАРТОЧКИ
+// ============================================================
+
+function serializeCard(c: VizCard): any {
+  return {
+    id: c.id,
+    vizId: c.vizId,
+    x: c.x,
+    y: c.y,
+    width: c.width,
+    height: c.height,
+    settings: {
+      title: c.settings.title,
+      showLegend: c.settings.showLegend,
+      showAxisLabels: c.settings.showAxisLabels,
+      legendText: c.settings.legendText,
+      slots: [
+        c.settings.slots[0] ? { ...c.settings.slots[0] } : null,
+        c.settings.slots[1] ? { ...c.settings.slots[1] } : null,
+      ],
+      bins: c.settings.bins,
+      yLabelOverride: c.settings.yLabelOverride,
+      topN: c.settings.topN,
+      showGrid: c.settings.showGrid,
+      precision: c.settings.precision,
+      buckets: c.settings.buckets.map((b: Bucket) => ({ ...b })),
+      bucketsShowName: c.settings.bucketsShowName,
+      renderMode: c.settings.renderMode,
+      ...(c.linkedCardId !== undefined && { linkedCardId: c.linkedCardId }),
+    },
+  };
+}
 
 function collectVizState(): VizState | null {
   if (!currentFileName) return null;
+
+  // Синхронизируем activeCardId текущего листа
+  const currentSheet = getCurrentSheet();
+  if (currentSheet) currentSheet.activeCardId = activeCardId;
+
+  const serializedSheets: SerializedSheet[] = sheets.map((sheet) => ({
+    id: sheet.id,
+    name: sheet.name,
+    activeCardId: sheet.activeCardId,
+    cards: sheet.cards.map(serializeCard),
+  }));
+
   return {
     fileName: currentFileName,
     savedAt: Date.now(),
-    cards: vizCards.map((c) => ({
-      id: c.id,
-      vizId: c.vizId,
-      x: c.x,
-      y: c.y,
-      width: c.width,
-      height: c.height,
-      settings: {
-        title: c.settings.title,
-        showLegend: c.settings.showLegend,
-        showAxisLabels: c.settings.showAxisLabels,
-        legendText: c.settings.legendText,
-        slots: [
-          c.settings.slots[0] ? { ...c.settings.slots[0] } : null,
-          c.settings.slots[1] ? { ...c.settings.slots[1] } : null,
-        ],
-        bins: c.settings.bins,
-        yLabelOverride: c.settings.yLabelOverride,
-        topN: c.settings.topN,
-        showGrid: c.settings.showGrid,
-        precision: c.settings.precision,
-        buckets: c.settings.buckets.map((b) => ({ ...b })),
-        bucketsShowName: c.settings.bucketsShowName,
-        renderMode: c.settings.renderMode,
-        // linkedCardId есть только у карточек-легенд.
-        // Каст `as any` нужен, потому что SerializedCard в viz-storage.ts
-        // не знает об этом поле. Само поле опционально — у обычных
-        // диаграмм его не будет.
-        ...(c.linkedCardId !== undefined && { linkedCardId: c.linkedCardId }),
-      } as any,
-    })),
+    // legacy-поле для обратной совместимости
+    cards: serializedSheets.flatMap((s) => s.cards),
     activeCardId,
     cardCounter,
-  };
+    // новые поля
+    sheets: serializedSheets,
+    activeSheetId,
+    sheetCounter,
+    panelsHidden: vizLayout.classList.contains("panels-hidden"),
+    settingsPanelOpen: settingsPanel.classList.contains("open"),
+  } as any;
 }
 
 let saveVizTimer: number | null = null;
@@ -1529,7 +1626,10 @@ async function persistVizState() {
 
 /** Восстанавливает карточки из сохранённого состояния. */
 function restoreVizState(state: VizState) {
-  // Чистим всё текущее
+  const extended = state as any;
+
+  // Чистим текущее
+    for (const id of [...runningBoxPlots.keys()]) stopBoxPlotForCard(id);
   for (const id of [...runningHistograms.keys()]) stopHistogramForCard(id);
   for (const id of [...runningBars.keys()]) stopBarChartForCard(id);
   for (const id of [...runningBucketedHistograms.keys()])
@@ -1537,13 +1637,63 @@ function restoreVizState(state: VizState) {
   for (const id of [...runningBucketedBars.keys()])
     stopBucketedBarChartForCard(id);
 
+  for (const layer of sheetLayers.values()) layer.remove();
+  sheetLayers.clear();
+
+
   vizCards = [];
+  sheets = [];
   activeCardId = null;
+  activeSheetId = "";
+  sheetCounter = 0;
+  legendBadges.clear();
   vizCanvas.querySelectorAll(".viz-card").forEach((el) => el.remove());
   clearGuides();
   vizEmptyState.style.display = "";
 
-  // Восстанавливаем счётчик id
+  // Формат: новый (sheets) или legacy (cards в одном листе)
+  const serializedSheets: SerializedSheet[] = extended.sheets
+    ? extended.sheets
+    : [
+        {
+          id: "sheet-1",
+          name: "Лист 1",
+          cards: state.cards || [],
+          activeCardId: state.activeCardId ?? null,
+        },
+      ];
+
+  sheetCounter = extended.sheetCounter || serializedSheets.length;
+
+  // Создаём записи листов + их DOM-слои
+  for (const ss of serializedSheets) {
+    const sheet: Sheet = {
+      id: ss.id,
+      name: ss.name,
+      cards: [],
+      activeCardId: ss.activeCardId,
+    };
+    sheets.push(sheet);
+    ensureSheetLayer(ss.id);
+
+    const m = ss.id.match(/^sheet-(\d+)$/);
+    if (m) {
+      const n = Number(m[1]);
+      if (n > sheetCounter) sheetCounter = n;
+    }
+  }
+
+  // Определяем активный лист
+  const targetActiveSheetId =
+    extended.activeSheetId &&
+    sheets.some((s) => s.id === extended.activeSheetId)
+      ? extended.activeSheetId
+      : sheets[0].id;
+  activeSheetId = targetActiveSheetId;
+  const activeSheet = sheets.find((s) => s.id === targetActiveSheetId)!;
+  vizCards = activeSheet.cards; // ссылка
+
+  // Восстанавливаем счётчик id карточек
   cardCounter = state.cardCounter || 0;
   for (const sc of state.cards) {
     const m = sc.id.match(/^viz-card-(\d+)$/);
@@ -1553,13 +1703,10 @@ function restoreVizState(state: VizState) {
     }
   }
 
-  // Восстанавливаем карточки в два прохода:
-  //   1) сначала обычные диаграммы,
-  //   2) затем карточки-легенды — они ссылаются на диаграммы по id
-  //      (linkedCardId), и к моменту их восстановления источники
-  //      уже должны существовать в vizCards.
-
-  const restoreCard = (sc: (typeof state.cards)[number]): void => {
+  // Восстанавливаем карточки по листам. Для каждого листа — два прохода:
+  //   1) обычные диаграммы,
+  //   2) карточки-легенды (ссылаются на диаграммы по linkedCardId).
+  const restoreCardInto = (sc: any, sheet: Sheet): void => {
     // Проверяем, что колонки в слотах существуют в текущем датасете
     const fixedSlots: [SerializedDataSlot | null, SerializedDataSlot | null] = [
       null,
@@ -1604,10 +1751,10 @@ function restoreVizState(state: VizState) {
         precision: sc.settings.precision ?? 0,
         buckets:
           sc.settings.buckets && sc.settings.buckets.length > 0
-            ? sc.settings.buckets.map((b) => ({
+            ? (sc.settings.buckets as Bucket[]).map((b: Bucket) => ({
                 id: b.id,
                 name: b.name,
-                operator: b.operator as BucketOperator,
+                operator: b.operator,
                 value1: b.value1,
                 value2: b.value2,
               }))
@@ -1618,56 +1765,79 @@ function restoreVizState(state: VizState) {
           "grouped",
       },
     };
-    vizCards.push(card);
-    createCardElement(card);
-    vizEmptyState.style.display = "none";
+    sheet.cards.push(card);
+    createCardElement(card, sheet.id);
+    if (sheet.id === activeSheetId) {
+      vizEmptyState.style.display = "none";
+    }
     syncCardVisual(card);
   };
 
-  // --- Проход 1: обычные карточки (диаграммы) ---
-  for (const sc of state.cards) {
-    if (sc.vizId === "legend") continue;
-    restoreCard(sc);
+  // Восстанавливаем каждый лист
+  for (const ss of serializedSheets) {
+    const sheet = sheets.find((s) => s.id === ss.id);
+    if (!sheet) continue;
+
+    // Проход 1: обычные диаграммы
+    for (const sc of ss.cards) {
+      if (sc.vizId === "legend") continue;
+      restoreCardInto(sc, sheet);
+    }
+    // Проход 2: карточки-легенды
+    for (const sc of ss.cards) {
+      if (sc.vizId !== "legend") continue;
+      const link = sc.settings?.linkedCardId as string | undefined;
+      if (!link || !sheet.cards.some((c) => c.id === link)) continue;
+      restoreCardInto(sc, sheet);
+    }
   }
 
-  // --- Проход 2: карточки-легенды ---
-  for (const sc of state.cards) {
-    if (sc.vizId !== "legend") continue;
-    const link = (sc.settings as any).linkedCardId as string | undefined;
-    // Если источник не восстановился — легенда не имеет смысла.
-    if (!link || !vizCards.some((c) => c.id === link)) continue;
-    restoreCard(sc);
+  // Принудительно перерисовываем тела легенд — исходные диаграммы
+  // могли ещё не успеть посчитать себя.
+  for (const sheet of sheets) {
+    for (const c of sheet.cards) {
+      if (c.vizId === "legend") renderLegendCardBody(c);
+    }
   }
 
-  // После восстановления принудительно перерисовываем тела легенд —
-  // исходные диаграммы могли ещё не успеть посчитать себя,
-  // а `refreshLinkedLegends` вызывается из onProgress/onDone
-  // и обновит их в течение следующего кадра.
-  for (const c of vizCards) {
-    if (c.vizId === "legend") renderLegendCardBody(c);
+  // Показываем активный лист
+  showSheetLayer(activeSheetId);
+
+  // Восстанавливаем панели
+  if (extended.panelsHidden) {
+    vizLayout.classList.add("panels-hidden");
+    togglePanelsBtn.textContent = "Показать панели";
+  } else {
+    vizLayout.classList.remove("panels-hidden");
+    togglePanelsBtn.textContent = "Скрыть панели";
   }
 
-  // Восстанавливаем активную карточку
-  if (state.activeCardId && vizCards.some((c) => c.id === state.activeCardId)) {
-    setActiveCard(state.activeCardId);
+  // Активная карточка текущего листа
+  const currentSheet = sheets.find((s) => s.id === activeSheetId);
+  if (currentSheet?.activeCardId) {
+    activeCardId = currentSheet.activeCardId;
+    vizCanvas.querySelectorAll(".viz-card").forEach((el) => {
+      el.classList.toggle("active", el.id === activeCardId);
+    });
+    if (extended.settingsPanelOpen) {
+      settingsPanel.classList.add("open");
+      renderSettingsContent(activeCardId);
+    }
   }
+
+  // Empty state для активного листа
+  if (currentSheet) {
+    vizEmptyState.style.display = currentSheet.cards.length === 0 ? "" : "none";
+  }
+
+  renderSheetTabs();
+  updateColumnsAvailability();
+  updateProgressUI();
 }
 
 // ============================================================
 // СИСТЕМА КАРТОЧЕК В РАБОЧЕМ ПРОСТРАНСТВЕ
 // ============================================================
-
-interface VizCard {
-  id: string;
-  vizId: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  settings: CardSettings;
-  /** Только для vizId === "legend": id диаграммы, к которой привязана легенда. */
-  linkedCardId?: string;
-}
 
 interface SnapCandidate {
   value: number;
@@ -1690,12 +1860,6 @@ const CARD_GAP = 12;
 const WORKSPACE_PADDING = 10;
 const SNAP_THRESHOLD = 6;
 const GUIDE_PADDING = 8;
-
-let vizCards: VizCard[] = [];
-let activeCardId: string | null = null;
-let cardCounter = 0;
-
-const legendBadges = new Map<string, LegendBadgeHandle>();
 
 // ============================================================
 // ТРЕКЕР ПРОГРЕССА ОБРАБОТКИ
@@ -2358,10 +2522,11 @@ function addVizCard(vizId: string): VizCard | null {
   return card;
 }
 
-function createCardElement(card: VizCard) {
+function createCardElement(card: VizCard, sheetId?: string) {
   const viz = VIZ_OPTIONS.find((v) => v.id === card.vizId);
   if (!viz) return;
 
+  const targetSheetId = sheetId ?? activeSheetId;
   const isLegend = card.vizId === "legend";
 
   const el = document.createElement("div");
@@ -2383,7 +2548,8 @@ function createCardElement(card: VizCard) {
         <div class="viz-card-resize" title="Изменить размер"></div>
     `;
 
-  vizCanvas.appendChild(el);
+  const layer = ensureSheetLayer(targetSheetId);
+  layer.appendChild(el);
 
   const closeBtn = el.querySelector(".viz-card-close") as HTMLButtonElement;
   closeBtn.addEventListener("pointerdown", (e) => e.stopPropagation());
@@ -2591,6 +2757,7 @@ function removeVizCard(cardId: string) {
     .filter((c) => c.vizId === "legend" && c.linkedCardId === cardId)
     .map((c) => c.id);
   for (const id of linkedLegendIds) removeVizCard(id);
+    for (const id of [...runningBoxPlots.keys()]) stopBoxPlotForCard(id);
 
   stopHistogramForCard(cardId);
   stopBarChartForCard(cardId);
@@ -2598,8 +2765,10 @@ function removeVizCard(cardId: string) {
   stopBucketedBarChartForCard(cardId);
   stopGroupedHistogramForCard(cardId);
   stopGroupedBarChartForCard(cardId);
+    stopBoxPlotForCard(cardId);
 
-  vizCards = vizCards.filter((c) => c.id !== cardId);
+  const idx = vizCards.findIndex((c) => c.id === cardId);
+  if (idx >= 0) vizCards.splice(idx, 1);
   legendBadges.delete(cardId);
   const el = document.getElementById(cardId);
   if (el) el.remove();
@@ -2730,18 +2899,273 @@ function selectVisualization(vizId: string) {
   addVizCard(vizId);
 }
 
-function resetVizOptions() {
-  for (const id of [...runningHistograms.keys()]) stopHistogramForCard(id);
-  for (const id of [...runningBars.keys()]) stopBarChartForCard(id);
-  for (const id of [...runningBucketedHistograms.keys()])
-    stopBucketedHistogramForCard(id);
-  for (const id of [...runningBucketedBars.keys()])
-    stopBucketedBarChartForCard(id);
+// ============================================================
+// ЛИСТЫ РАБОЧЕГО ПРОСТРАНСТВА — УПРАВЛЕНИЕ
+// ============================================================
+// (getCurrentSheet объявлена выше — здесь её нет.)
 
+function renderSheetTabs(): void {
+  const scroll = document.getElementById("sheet-tabs-scroll");
+  if (!scroll) return;
+
+  scroll.innerHTML = sheets
+    .map(
+      (sheet) => `
+      <div class="sheet-tab${sheet.id === activeSheetId ? " active" : ""}"
+           data-sheet-id="${escapeHtml(sheet.id)}"
+           title="${escapeHtml(sheet.name)}">
+        <span class="sheet-tab-name">${escapeHtml(sheet.name)}</span>
+        ${
+          sheets.length > 1
+            ? `<button class="sheet-tab-close" data-close-sheet="${escapeHtml(sheet.id)}" title="Удалить лист">×</button>`
+            : ""
+        }
+      </div>
+    `,
+    )
+    .join("");
+
+  scroll.querySelectorAll<HTMLElement>(".sheet-tab").forEach((tab) => {
+    const sheetId = tab.getAttribute("data-sheet-id");
+    if (!sheetId) return;
+
+    tab.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement).closest(".sheet-tab-close")) return;
+      switchSheet(sheetId);
+    });
+
+    tab.addEventListener("dblclick", (e) => {
+      if ((e.target as HTMLElement).closest(".sheet-tab-close")) return;
+      startRenameSheet(sheetId);
+    });
+  });
+
+  scroll
+    .querySelectorAll<HTMLButtonElement>(".sheet-tab-close")
+    .forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const sheetId = btn.getAttribute("data-close-sheet");
+        if (sheetId) deleteSheet(sheetId);
+      });
+    });
+}
+
+function switchSheet(newSheetId: string): void {
+  if (newSheetId === activeSheetId) return;
+
+  const newSheet = sheets.find((s) => s.id === newSheetId);
+  if (!newSheet) return;
+
+  // Сохраняем активную карточку текущего листа
+  const oldSheet = sheets.find((s) => s.id === activeSheetId);
+  if (oldSheet) oldSheet.activeCardId = activeCardId;
+
+  // Переключаем состояние
+  activeSheetId = newSheetId;
+  // ⚠️ Переприсваиваем ссылку — mutations в vizCards теперь
+  // изменяют newSheet.cards (тот же объект массива)
+  vizCards = newSheet.cards;
+  activeCardId = newSheet.activeCardId;
+
+  // DOM: показываем слой нового листа
+  ensureSheetLayer(newSheetId);
+  showSheetLayer(newSheetId);
+
+  // Empty state
+  vizEmptyState.style.display = vizCards.length === 0 ? "" : "none";
+
+  // Активная карточка
+  vizCanvas.querySelectorAll(".viz-card").forEach((el) => {
+    el.classList.toggle("active", el.id === activeCardId);
+  });
+
+  // Панель настроек
+  if (activeCardId) {
+    renderSettingsContent(activeCardId);
+    settingsPanel.classList.add("open");
+  } else {
+    closeSettingsPanel();
+  }
+
+  updateColumnsAvailability();
+  updateProgressUI();
+  renderSheetTabs();
+
+  // Скроллим вкладку в видимую зону
+  requestAnimationFrame(() => {
+    const tab = document.querySelector<HTMLElement>(
+      `.sheet-tab[data-sheet-id="${newSheetId}"]`,
+    );
+    if (tab) {
+      tab.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+        inline: "nearest",
+      });
+    }
+  });
+
+  scheduleSaveVizState();
+}
+
+function createSheet(): Sheet {
+  // id — технический, для внутреннего map'а слоёв и persistence.
+  // Он должен быть всегда уникален, даже после удаления листов,
+  // поэтому используем монотонный счётчик.
+  const id = `sheet-${++sheetCounter}`;
+
+  // Имя — видимое, генерируется как «первое свободное Лист N».
+  // Если пользователь удалил Лист 2 из Лист 1 / Лист 2 / Лист 3,
+  // следующий созданный лист снова станет Листом 2, а не Листом 4.
+  const usedNumbers = new Set<number>();
+  for (const s of sheets) {
+    const m = s.name.match(/^Лист\s+(\d+)$/);
+    if (m) usedNumbers.add(Number(m[1]));
+  }
+  let visibleNum = 1;
+  while (usedNumbers.has(visibleNum)) visibleNum++;
+
+  const sheet: Sheet = {
+    id,
+    name: `Лист ${visibleNum}`,
+    cards: [],
+    activeCardId: null,
+  };
+  sheets.push(sheet);
+  ensureSheetLayer(id);
+  switchSheet(id);
+
+  // Автоматически отматываем панель в правый край — новый лист виден
+  requestAnimationFrame(() => {
+    const scroll = document.getElementById("sheet-tabs-scroll");
+    if (scroll) scroll.scrollLeft = scroll.scrollWidth;
+  });
+
+  return sheet;
+}
+
+function startRenameSheet(sheetId: string): void {
+  const sheet = sheets.find((s) => s.id === sheetId);
+  if (!sheet) return;
+
+  const tab = document.querySelector<HTMLElement>(
+    `.sheet-tab[data-sheet-id="${sheetId}"]`,
+  );
+  if (!tab) return;
+
+  const nameEl = tab.querySelector(".sheet-tab-name");
+  if (!nameEl) return;
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "sheet-tab-input";
+  input.value = sheet.name;
+
+  tab.replaceChild(input, nameEl);
+  input.focus();
+  input.select();
+
+  let committed = false;
+
+  const commit = () => {
+    if (committed) return;
+    committed = true;
+    const trimmed = input.value.trim();
+    if (trimmed) {
+      sheet.name = trimmed;
+      scheduleSaveVizState();
+    }
+    renderSheetTabs();
+  };
+
+  const cancel = () => {
+    if (committed) return;
+    committed = true;
+    renderSheetTabs();
+  };
+
+  input.addEventListener("blur", commit);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      input.blur();
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      cancel();
+    }
+  });
+}
+
+function deleteSheet(sheetId: string): void {
+  if (sheets.length <= 1) return;
+
+  const sheet = sheets.find((s) => s.id === sheetId);
+  if (!sheet) return;
+
+  // Останавливаем все runs на этом листе
+  for (const card of sheet.cards) {
+    stopBoxPlotForCard(card.id);
+    stopHistogramForCard(card.id);
+    stopBarChartForCard(card.id);
+    stopBucketedHistogramForCard(card.id);
+    stopBucketedBarChartForCard(card.id);
+    stopGroupedHistogramForCard(card.id);
+    stopGroupedBarChartForCard(card.id);
+    legendBadges.delete(card.id);
+  }
+
+  // Удаляем слой
+  const layer = sheetLayers.get(sheetId);
+  if (layer) layer.remove();
+  sheetLayers.delete(sheetId);
+
+  // Удаляем из массива
+  const idx = sheets.findIndex((s) => s.id === sheetId);
+  sheets.splice(idx, 1);
+
+  // Если удалили активный — переключаемся на соседний
+  if (activeSheetId === sheetId) {
+    const target = sheets[Math.min(idx, sheets.length - 1)];
+    activeSheetId = ""; // force switch
+    switchSheet(target.id);
+  } else {
+    renderSheetTabs();
+  }
+
+  scheduleSaveVizState();
+}
+
+// Обработчик кнопки «+»
+document.getElementById("sheet-tabs-add")?.addEventListener("click", () => {
+  createSheet();
+});
+
+function resetVizOptions() {
+  // Останавливаем все runs
+  for (const sheet of sheets) {
+    for (const card of sheet.cards) {
+      stopHistogramForCard(card.id);
+      stopBarChartForCard(card.id);
+      stopBucketedHistogramForCard(card.id);
+      stopBucketedBarChartForCard(card.id);
+      stopGroupedHistogramForCard(card.id);
+      stopGroupedBarChartForCard(card.id);
+            stopBoxPlotForCard(card.id);
+    }
+  }
+
+  // Очищаем листы
+  for (const layer of sheetLayers.values()) layer.remove();
+  sheetLayers.clear();
+  sheets = [];
+  sheetCounter = 0;
   vizCards = [];
-  legendBadges.clear();
+  activeSheetId = "";
   activeCardId = null;
   selectedColumnIndex = null;
+  legendBadges.clear();
 
   vizCanvas.querySelectorAll(".viz-card").forEach((el) => el.remove());
   clearGuides();
@@ -2751,8 +3175,12 @@ function resetVizOptions() {
 
   resetProgress();
 
+  // Создаём первый пустой лист
+  createSheet();
+
   renderVizOptions();
   updateColumnsAvailability();
+  renderSheetTabs();
 }
 
 // ============================================================
@@ -3796,6 +4224,17 @@ function syncCardVisual(card: VizCard) {
 
   const slot0 = card.settings.slots[0];
 
+    if (card.vizId === "boxplot" && slot0 && currentData) {
+    stopHistogramForCard(card.id);
+    stopBarChartForCard(card.id);
+    stopBucketedHistogramForCard(card.id);
+    stopBucketedBarChartForCard(card.id);
+    stopGroupedHistogramForCard(card.id);
+    stopGroupedBarChartForCard(card.id);
+    runBoxPlotForCard(card);
+    return;
+  }
+
   if (card.vizId === "histogram" && slot0 && currentData) {
     stopBarChartForCard(card.id);
     stopBucketedBarChartForCard(card.id);
@@ -3846,6 +4285,13 @@ function syncCardVisual(card: VizCard) {
 }
 
 function redrawActive(card: VizCard) {
+
+    const boxPlot = runningBoxPlots.get(card.id);
+  if (boxPlot) {
+    boxPlot.redraw();
+    return;
+  }
+
   const groupedBar = runningGroupedBars.get(card.id);
   if (groupedBar) {
     groupedBar.redraw();
@@ -4340,7 +4786,7 @@ function runBucketedBarChartForCard(card: VizCard) {
   };
   const getYLabel = () => {
     if (!card.settings.showAxisLabels) return "";
-    return (slot.legendText || slot.name).trim();
+    return slot.legendText.trim();
   };
   const getLegendText = () => {
     if (!card.settings.showLegend) return "";
@@ -5876,13 +6322,15 @@ function openBadRowsModal(cardId: string) {
   const bucketed = runningBucketedHistograms.get(cardId);
   const hist = runningHistograms.get(cardId);
   const bar = runningBars.get(cardId);
+  const boxPlot = runningBoxPlots.get(cardId);
   const stats =
     groupedBar?.extractionStats ??
     grouped?.extractionStats ??
     bucketedBar?.extractionStats ??
     bucketed?.extractionStats ??
     hist?.extractionStats ??
-    bar?.extractionStats;
+    bar?.extractionStats ??
+    boxPlot?.extractionStats;
   if (!stats) return;
 
   const card = vizCards.find((c) => c.id === cardId);
@@ -6199,6 +6647,235 @@ interface BarChartRun {
   issuesBadge: HTMLElement | null;
   /** Перерисовка с текущими настройками. */
   redraw: () => void;
+}
+
+// ============================================================
+// BOX PLOT — ИНТЕГРАЦИЯ
+// ============================================================
+
+interface BoxPlotRun {
+  handle: BoxPlotHandle;
+  canvas: HTMLCanvasElement;
+  renderer: BoxPlotRenderer;
+  lastState: BoxPlotChunkResult | null;
+  observer: ResizeObserver;
+  getXLabel: () => string;
+  getYLabel: () => string;
+  tooltip: HTMLDivElement;
+  onMove: (e: MouseEvent) => void;
+  onLeave: () => void;
+  extractionStats: ExtractionStats;
+  issuesBadge: HTMLElement | null;
+  redraw: () => void;
+}
+
+const runningBoxPlots = new Map<string, BoxPlotRun>();
+
+function runBoxPlotForCard(card: VizCard) {
+  stopBoxPlotForCard(card.id);
+
+  if (!currentData) return;
+  const slot = card.settings.slots[0];
+  if (!slot) return;
+
+  const t0 = performance.now();
+  const { values: data, stats } = extractNumericColumn(
+    currentData,
+    slot.columnIndex,
+  );
+
+  if (data.length < 5) {
+    console.warn(
+      `[Box plot ${card.id}] нужно минимум 5 значений в колонке «${slot.name}»`,
+    );
+    return;
+  }
+
+  const el = document.getElementById(card.id);
+  const body = el?.querySelector(".viz-card-body") as HTMLElement | null;
+  if (!body) return;
+
+  body.innerHTML = '<canvas class="viz-canvas-2d"></canvas>';
+  const canvas = body.querySelector("canvas") as HTMLCanvasElement;
+  const renderer = new BoxPlotRenderer(canvas);
+
+  const resizeCanvas = () => {
+    const r = body.getBoundingClientRect();
+    renderer.resize(r.width - 16, r.height - 16);
+  };
+  resizeCanvas();
+
+  // По логике renderSettingsContent для box plot (ветка «не-histogram»):
+  //   «Подпись оси X (частота)»  → yLabelOverride
+  //   «Подпись оси Y (значения)» → slot.legendText
+  const getXLabel = () => {
+    if (!card.settings.showAxisLabels) return "";
+    return card.settings.yLabelOverride.trim();
+  };
+    const getYLabel = () => {
+    if (!card.settings.showAxisLabels) return "";
+    return (slot.legendText ?? "").trim();
+  };
+  const getLegendText = () => {
+    if (!card.settings.showLegend) return "";
+    return card.settings.legendText.trim() || slot.name;
+  };
+
+  const redraw = () => {
+    const run = runningBoxPlots.get(card.id);
+    const state = run?.lastState ?? null;
+
+    renderer.draw(state, {
+      xLabel: getXLabel(),
+      yLabel: getYLabel(),
+      legendText: getLegendText(),
+      showGrid: card.settings.showGrid,
+      showAxisLabels: card.settings.showAxisLabels,
+      precision: card.settings.precision,
+      processed: state?.processed,
+      total: state?.total,
+      placeholder: "Готовим первую порцию…",
+    });
+  };
+
+  const observer = new ResizeObserver(() => {
+    resizeCanvas();
+    redraw();
+  });
+  observer.observe(body);
+
+  // ---------- Tooltip ----------
+  const tooltip = document.createElement("div");
+  tooltip.className = "viz-tooltip hidden";
+  document.body.appendChild(tooltip);
+
+  const onMove = (e: MouseEvent) => {
+    const rect = canvas.getBoundingClientRect();
+    const hit = renderer.hitTest(
+      e.clientX - rect.left,
+      e.clientY - rect.top,
+    );
+    if (!hit) {
+      tooltip.classList.add("hidden");
+      return;
+    }
+    const p = card.settings.precision;
+    const st = runningBoxPlots.get(card.id)?.lastState;
+    const upOut = st?.upperOutlierCount ?? 0;
+    const loOut = st?.lowerOutlierCount ?? 0;
+    const totalOut = upOut + loOut;
+
+    tooltip.innerHTML = `
+      <div class="viz-tooltip-title">box plot</div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">max</span>
+        <span class="viz-tooltip-value">${formatNumberPrecise(hit.max, p)}</span>
+      </div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">Q3</span>
+        <span class="viz-tooltip-value">${formatNumberPrecise(hit.q3, p)}</span>
+      </div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">median</span>
+        <span class="viz-tooltip-value">${formatNumberPrecise(hit.median, p)}</span>
+      </div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">Q1</span>
+        <span class="viz-tooltip-value">${formatNumberPrecise(hit.q1, p)}</span>
+      </div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">min</span>
+        <span class="viz-tooltip-value">${formatNumberPrecise(hit.min, p)}</span>
+      </div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">IQR</span>
+        <span class="viz-tooltip-value">${formatNumberPrecise(hit.iqr, p)}</span>
+      </div>
+      ${totalOut > 0 ? `
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">выбросов</span>
+        <span class="viz-tooltip-value">${totalOut.toLocaleString("ru-RU")}</span>
+      </div>
+      ` : ""}
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">n</span>
+        <span class="viz-tooltip-value">${hit.count.toLocaleString("ru-RU")}</span>
+      </div>
+    `;
+    tooltip.style.left = `${e.clientX}px`;
+    tooltip.style.top = `${e.clientY}px`;
+    tooltip.classList.remove("hidden");
+  };
+
+  const onLeave = () => tooltip.classList.add("hidden");
+
+  canvas.addEventListener("mousemove", onMove);
+  canvas.addEventListener("mouseleave", onLeave);
+
+  const errorsCount = stats.nulls + stats.nans + stats.nonNumeric;
+  const issuesHandle = el ? createIssuesBadge(el, card.id) : null;
+  issuesHandle?.update(errorsCount, 0);
+  const issuesBadge: HTMLElement | null = issuesHandle?.el ?? null;
+
+  const run: BoxPlotRun = {
+    handle: { cancel: () => {} },
+    canvas,
+    renderer,
+    lastState: null,
+    observer,
+    getXLabel,
+    getYLabel,
+    tooltip,
+    onMove,
+    onLeave,
+    extractionStats: stats,
+    issuesBadge,
+    redraw,
+  };
+  runningBoxPlots.set(card.id, run);
+
+  redraw();
+  registerProgressRun(card.id, data.length);
+
+  const handle = runProgressiveBoxPlot({
+    data,
+    onProgress: (state) => {
+      run.lastState = state;
+      updateProgressRun(card.id, state.processed, state.total);
+      redraw();
+    },
+    onDone: (state) => {
+      run.lastState = state;
+      finishProgressRun(card.id);
+      redraw();
+
+      const elapsed = Math.round(performance.now() - t0);
+      console.group(
+        `%c[Box plot ${card.id}] готово за ${elapsed} мс`,
+        "color:#16a34a;font-weight:bold",
+      );
+      console.log(`Обработано: ${state.total.toLocaleString("ru-RU")}`);
+      console.log(
+        `Q1=${state.q1.toFixed(2)} median=${state.median.toFixed(2)} Q3=${state.q3.toFixed(2)}`,
+      );
+      console.groupEnd();
+    },
+  });
+
+  run.handle = handle;
+}
+
+function stopBoxPlotForCard(cardId: string) {
+  const run = runningBoxPlots.get(cardId);
+  if (!run) return;
+  run.handle.cancel();
+  run.observer.disconnect();
+  run.canvas.removeEventListener("mousemove", run.onMove);
+  run.canvas.removeEventListener("mouseleave", run.onLeave);
+  run.tooltip.remove();
+  if (run.issuesBadge) run.issuesBadge.remove();
+  runningBoxPlots.delete(cardId);
+  unregisterProgressRun(cardId);
 }
 
 const runningBars = new Map<string, BarChartRun>();

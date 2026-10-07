@@ -44,7 +44,6 @@ body {
      глобального user-select: none Chrome/Edge начинают тянуть
      содержимое страницы из любой точки. */
   -webkit-user-drag: none;
-  user-drag: none;
 }
 
 /* --- Формы: пользователь должен мочь вводить и выделять текст --- */
@@ -1067,7 +1066,7 @@ tr:hover {
   flex: 1;
   overflow: hidden;
   min-width: 0;
-  min-height: 600px;
+  min-height: 300px;
   background: white;
 }
 
@@ -2303,6 +2302,157 @@ tr:hover {
   color: #94a3b8;
   background: #fafbfc;
   border-top: 1px solid #f0f2f5;
+}
+
+/* ============================================================
+   ЛИСТЫ РАБОЧЕГО ПРОСТРАНСТВА
+   ============================================================
+   Нижняя панель на странице визуализации. Аналог вкладок в Excel
+   или Power BI. Каждый лист — отдельное пространство для карточек.
+*/
+
+/* Слой карточек текущего листа. Абсолютно позиционирован,
+   занимает всю площадь viz-canvas. Все листы создаются заранее,
+   переключение — только show/hide через display. */
+.viz-sheet-layer {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+
+.sheet-tabs {
+  display: flex;
+  align-items: stretch;
+  background: #f5f7fa;
+  border-top: 1.5px solid #d8dde3;
+  flex-shrink: 0;
+  min-height: 34px;
+  user-select: none;
+}
+
+.sheet-tabs-scroll {
+  flex: 1;
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  overflow-y: hidden;
+  min-width: 0;
+  scrollbar-width: thin;
+}
+
+.sheet-tabs-scroll::-webkit-scrollbar {
+  height: 6px;
+}
+.sheet-tabs-scroll::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+.sheet-tabs-scroll::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+.sheet-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  min-width: 90px;
+  max-width: 220px;
+  border-right: 1px solid #e5e9ee;
+  background: #f5f7fa;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+
+.sheet-tab:hover {
+  background: #eef2f7;
+}
+
+.sheet-tab.active {
+  background: white;
+  color: #0f1720;
+  font-weight: 700;
+  box-shadow: inset 0 -2px 0 #4a9eff;
+}
+
+.sheet-tab-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheet-tab-close {
+  width: 16px;
+  height: 16px;
+  border: none;
+  background: none;
+  color: #94a3b8;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 3px;
+  display: none;
+  padding: 0;
+  font-family: inherit;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+
+.sheet-tab:hover .sheet-tab-close,
+.sheet-tab.active .sheet-tab-close {
+  display: flex;
+}
+
+.sheet-tab-close:hover {
+  background: #ffe6e6;
+  color: #dc2626;
+}
+
+.sheet-tab-input {
+  border: none;
+  background: white;
+  font: inherit;
+  color: inherit;
+  font-weight: inherit;
+  padding: 3px 6px;
+  outline: 2px solid #4a9eff;
+  border-radius: 3px;
+  min-width: 60px;
+  max-width: 160px;
+  width: 100%;
+}
+
+.sheet-tabs-add {
+  flex-shrink: 0;
+  width: 36px;
+  border: none;
+  border-left: 1px solid #e5e9ee;
+  background: #f5f7fa;
+  color: #4a5568;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  padding: 0;
+  font-family: inherit;
+}
+
+.sheet-tabs-add:hover {
+  background: #e6f2ff;
+  color: #4a9eff;
+}
+
+.sheet-tabs-add:active {
+  background: #dbe9f8;
 }
 
 /* ============================================================
