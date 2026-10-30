@@ -208,6 +208,9 @@ function siftDevExtras(): Plugin {
 export default defineConfig({
   plugins: [siftDevExtras()],
   server: {
+    // Явно фиксируем: dev-сервер не открывает браузер сам.
+    // Иначе на Windows окно Edge выводится на передний план.
+    open: false,
     watch: {
       ignored: ["**/public/datasets/**"],
     },

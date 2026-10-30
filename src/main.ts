@@ -47,6 +47,7 @@ import { GroupedHistogramRenderer } from "./lib/renderers/grouped-histogram-rend
 import { GroupedBarChartRenderer } from "./lib/renderers/grouped-barchart-renderer.js";
 
 import { BoxPlotRenderer } from "./lib/renderers/box-plot-renderer.js";
+import { GroupedBoxPlotRenderer } from "./lib/renderers/grouped-box-plot-renderer.js";
 
 import {
   saveVizState,
@@ -1121,11 +1122,9 @@ interface VizOption {
   id: string;
   label: string;
   types: string[];
-  section: "histogram" | "barchart" | "other";
-  /** Готов ли к использованию. Иначе — заглушка «скоро». */
+  section: "histogram" | "barchart" | "boxplot" | "other";
   enabled: boolean;
   icon: string;
-  /** Заголовок карточки по умолчанию. Если не задан — берётся label. */
   defaultTitle?: string;
 }
 
@@ -1238,12 +1237,13 @@ const VIZ_OPTIONS: VizOption[] = [
         </svg>`,
   },
 
-  // ============ ДРУГОЕ ============
+  // ============ БОКСПЛОТЫ ============
   {
     id: "boxplot",
-    label: "Box plot",
+    label: "Вертикальный",
+    defaultTitle: "Box Plot",
     types: ["numeric"],
-    section: "other",
+    section: "boxplot",
     enabled: true,
     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="12" y1="3" x2="12" y2="7"/>
@@ -1252,6 +1252,49 @@ const VIZ_OPTIONS: VizOption[] = [
             <line x1="8" y1="12" x2="16" y2="12"/>
         </svg>`,
   },
+  {
+    id: "boxplot-horizontal",
+    label: "Горизонтальный",
+    defaultTitle: "Box Plot (гориз.)",
+    types: ["numeric"],
+    section: "boxplot",
+    enabled: true,
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="3" y1="12" x2="7" y2="12"/>
+            <line x1="17" y1="12" x2="21" y2="12"/>
+            <rect x="7" y="7" width="10" height="10" rx="1"/>
+            <line x1="12" y1="8" x2="12" y2="16"/>
+        </svg>`,
+  },
+  {
+    id: "boxplot-grouped",
+    label: "С группировкой",
+    defaultTitle: "Box Plot с группировкой",
+    // Нужны оба типа: numeric (значения) + категориальный (группировка).
+    types: [
+      "numeric",
+      "string",
+      "mixed",
+      "boolean",
+      "date",
+      "datetime",
+      "ordinal",
+    ],
+    section: "boxplot",
+    enabled: true,
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="6" y1="4" x2="6" y2="20"/>
+            <rect x="3" y="8" width="6" height="8" rx="1"/>
+            <line x1="3" y1="12" x2="9" y2="12"/>
+            <line x1="14" y1="4" x2="14" y2="20"/>
+            <rect x="11" y="7" width="6" height="10" rx="1"/>
+            <line x1="11" y1="12" x2="17" y2="12"/>
+            <line x1="21" y1="6" x2="21" y2="18"/>
+            <rect x="19" y="9" width="4" height="6" rx="1"/>
+            <line x1="19" y1="12" x2="23" y2="12"/>
+        </svg>`,
+  },
+  // ============ ДРУГОЕ ============
   {
     id: "piechart",
     label: "Круговая",
@@ -1302,6 +1345,36 @@ const VIZ_TEMPLATES: Record<string, string> = {
             <rect x="140" y="90" width="120" height="80" fill="#e6f2ff" stroke="#4a9eff" stroke-width="2" stroke-dasharray="6 4"/>
             <line x1="140" y1="130" x2="260" y2="130" stroke="#4a9eff" stroke-width="2"/>
             <text x="200" y="250" text-anchor="middle" font-size="12" fill="#94a3b8">Распределение</text>
+        </svg>
+    `,
+  "boxplot-horizontal": `
+        <svg viewBox="0 0 400 260" preserveAspectRatio="xMidYMid meet">
+            <line x1="40" y1="130" x2="360" y2="130" stroke="#c8cfd8" stroke-width="2"/>
+            <line x1="80" y1="90" x2="80" y2="170" stroke="#4a9eff" stroke-width="2"/>
+            <line x1="320" y1="90" x2="320" y2="170" stroke="#4a9eff" stroke-width="2"/>
+            <rect x="140" y="90" width="120" height="80" fill="#e6f2ff" stroke="#4a9eff" stroke-width="2" stroke-dasharray="6 4"/>
+            <line x1="200" y1="90" x2="200" y2="170" stroke="#4a9eff" stroke-width="2"/>
+            <text x="200" y="230" text-anchor="middle" font-size="12" fill="#94a3b8">Распределение</text>
+        </svg>
+    `,
+  "boxplot-grouped": `
+        <svg viewBox="0 0 400 260" preserveAspectRatio="xMidYMid meet">
+            <line x1="40" y1="30" x2="40" y2="220" stroke="#c8cfd8" stroke-width="2"/>
+            <line x1="40" y1="220" x2="380" y2="220" stroke="#c8cfd8" stroke-width="2"/>
+            <g stroke-width="2">
+                <line x1="100" y1="70" x2="100" y2="200" stroke="#4a9eff"/>
+                <rect x="80" y="100" width="40" height="70" fill="#e6f2ff" stroke="#4a9eff" stroke-dasharray="6 4"/>
+                <line x1="80" y1="135" x2="120" y2="135" stroke="#4a9eff"/>
+                <line x1="190" y1="50" x2="190" y2="190" stroke="#f59e0b"/>
+                <rect x="170" y="90" width="40" height="60" fill="#fef3c7" stroke="#f59e0b" stroke-dasharray="6 4"/>
+                <line x1="170" y1="120" x2="210" y2="120" stroke="#f59e0b"/>
+                <line x1="280" y1="90" x2="280" y2="210" stroke="#10b981"/>
+                <rect x="260" y="110" width="40" height="80" fill="#d1fae5" stroke="#10b981" stroke-dasharray="6 4"/>
+                <line x1="260" y1="150" x2="300" y2="150" stroke="#10b981"/>
+            </g>
+            <text x="100" y="245" text-anchor="middle" font-size="11" fill="#94a3b8">A</text>
+            <text x="190" y="245" text-anchor="middle" font-size="11" fill="#94a3b8">B</text>
+            <text x="280" y="245" text-anchor="middle" font-size="11" fill="#94a3b8">C</text>
         </svg>
     `,
   piechart: `
@@ -1630,6 +1703,8 @@ function restoreVizState(state: VizState) {
 
   // Чистим текущее
     for (const id of [...runningBoxPlots.keys()]) stopBoxPlotForCard(id);
+  for (const id of [...runningGroupedBoxPlots.keys()])
+    stopGroupedBoxPlotForCard(id);
   for (const id of [...runningHistograms.keys()]) stopHistogramForCard(id);
   for (const id of [...runningBars.keys()]) stopBarChartForCard(id);
   for (const id of [...runningBucketedHistograms.keys()])
@@ -2425,6 +2500,8 @@ function findBestMatch(
 
 function getDefaultSize(vizId: string): { width: number; height: number } {
   if (vizId === "summary") return { width: 340, height: 260 };
+  if (vizId === "boxplot-grouped") return { width: 620, height: 340 };
+  if (vizId === "boxplot-horizontal") return { width: 460, height: 300 };
   return { width: 420, height: 320 };
 }
 
@@ -2583,7 +2660,7 @@ function createCardElement(card: VizCard, sheetId?: string) {
   }
 
   // Бейдж легенды — только для grouped-визуализаций
-  if (card.vizId === "histogram-grouped" || card.vizId === "barchart-grouped") {
+  if (card.vizId === "histogram-grouped" || card.vizId === "barchart-grouped" || card.vizId === "boxplot-grouped") {
     const badge = createLegendBadge(el);
     if (badge) legendBadges.set(card.id, badge);
   }
@@ -2758,6 +2835,8 @@ function removeVizCard(cardId: string) {
     .map((c) => c.id);
   for (const id of linkedLegendIds) removeVizCard(id);
     for (const id of [...runningBoxPlots.keys()]) stopBoxPlotForCard(id);
+  for (const id of [...runningGroupedBoxPlots.keys()])
+    stopGroupedBoxPlotForCard(id);
 
   stopHistogramForCard(cardId);
   stopBarChartForCard(cardId);
@@ -2766,6 +2845,7 @@ function removeVizCard(cardId: string) {
   stopGroupedHistogramForCard(cardId);
   stopGroupedBarChartForCard(cardId);
     stopBoxPlotForCard(cardId);
+  stopGroupedBoxPlotForCard(cardId);
 
   const idx = vizCards.findIndex((c) => c.id === cardId);
   if (idx >= 0) vizCards.splice(idx, 1);
@@ -2828,6 +2908,9 @@ function renderVizOptions() {
   const barchartList = document.getElementById(
     "viz-options-barchart",
   ) as HTMLUListElement;
+  const boxplotList = document.getElementById(
+    "viz-options-boxplot",
+  ) as HTMLUListElement;
   const otherList = document.getElementById(
     "viz-options-other",
   ) as HTMLUListElement;
@@ -2835,6 +2918,7 @@ function renderVizOptions() {
   const listsBySection: Record<string, HTMLUListElement> = {
     histogram: histogramList,
     barchart: barchartList,
+    boxplot: boxplotList,
     other: otherList,
   };
 
@@ -3107,6 +3191,7 @@ function deleteSheet(sheetId: string): void {
   // Останавливаем все runs на этом листе
   for (const card of sheet.cards) {
     stopBoxPlotForCard(card.id);
+    stopGroupedBoxPlotForCard(card.id);
     stopHistogramForCard(card.id);
     stopBarChartForCard(card.id);
     stopBucketedHistogramForCard(card.id);
@@ -3153,6 +3238,7 @@ function resetVizOptions() {
       stopGroupedHistogramForCard(card.id);
       stopGroupedBarChartForCard(card.id);
             stopBoxPlotForCard(card.id);
+      stopGroupedBoxPlotForCard(card.id);
     }
   }
 
@@ -3401,19 +3487,32 @@ function renderSettingsContent(cardId: string) {
   const hasBuckets = isBuckets || isHistogramGrouped || isBarChartGrouped;
   /** Любая grouped/stacked-визуализация (гисто или линейчатая). */
   const isGrouped = isHistogramGrouped || isBarChartGrouped;
+  /** Box plot с группировкой по категориям. */
+  const isBoxGrouped = card.vizId === "boxplot-grouped";
+  /** Горизонтальный box plot: оси X и Y меняются местами. */
+  const isBoxHorizontal = card.vizId === "boxplot-horizontal";
 
   // ---------- Легенда ----------
   let legendFieldsHtml = "";
   if (isGrouped) {
-    // В grouped-визуализациях легенда строится по категориям
-    // группировки (seriesNames), а не по вводимому тексту.
-    // Показываем подсказку, а не поле ввода — иначе пользователь
-    // вводит текст и не понимает, почему он не появляется.
+    // В grouped-гистограммах/линейчатых легенда строится по категориям
+    // группировки (seriesNames). Показываем подсказку и поле ввода.
     legendFieldsHtml = `
       <p class="settings-hint">
         Легенда строится автоматически по категориям колонки «Группировка».
         ${slot1 ? `Сейчас серии — значения из <b>${escapeHtml(slot1.name)}</b>.` : ""}
-      </p>`;
+      </p>
+      <div class="settings-field">
+        <label class="settings-label">Текст легенды</label>
+        <input type="text" class="settings-input"
+               data-legend-text
+               value="${escapeHtml(s.legendText)}"
+               placeholder="${escapeHtml(slot1?.name ?? "")}" />
+      </div>`;
+  } else if (isBoxGrouped) {
+    // Групповой box plot: легенда — список категорий с цветами.
+    // Поле ввода текста не нужно — оставляем только чекбокс showLegend.
+    legendFieldsHtml = "";
   } else if (slot0) {
     legendFieldsHtml = `
       <div class="settings-field">
@@ -3449,6 +3548,44 @@ function renderSettingsContent(cardId: string) {
                  placeholder="Частота"
                  ${s.showAxisLabels ? "" : "disabled"} />
         </div>`;
+    } else if (isBoxHorizontal) {
+      // Горизонтальный box plot: значения по X, категория по Y.
+      axisFieldsHtml = `
+        <div class="settings-field">
+          <label class="settings-label">Подпись оси X (значения)</label>
+          <input type="text" class="settings-input"
+                 data-axis-x
+                 value="${escapeHtml(slot0.legendText)}"
+                 placeholder="${escapeHtml(slot0.name)}"
+                 ${s.showAxisLabels ? "" : "disabled"} />
+        </div>
+        <div class="settings-field">
+          <label class="settings-label">Подпись оси Y (категория)</label>
+          <input type="text" class="settings-input"
+                 data-axis-y
+                 value="${escapeHtml(s.yLabelOverride)}"
+                 placeholder="Категория"
+                 ${s.showAxisLabels ? "" : "disabled"} />
+        </div>`;
+    } else if (isBoxGrouped) {
+      // Групповой box plot: категории по X, значения по Y.
+      axisFieldsHtml = `
+        <div class="settings-field">
+          <label class="settings-label">Подпись оси X (категории)</label>
+          <input type="text" class="settings-input"
+                 data-axis-y
+                 value="${escapeHtml(s.yLabelOverride)}"
+                 placeholder="Категории"
+                 ${s.showAxisLabels ? "" : "disabled"} />
+        </div>
+        <div class="settings-field">
+          <label class="settings-label">Подпись оси Y (значения)</label>
+          <input type="text" class="settings-input"
+                 data-axis-x
+                 value="${escapeHtml(slot0.legendText)}"
+                 placeholder="${escapeHtml(slot0.name)}"
+                 ${s.showAxisLabels ? "" : "disabled"} />
+        </div>`;
     } else {
       axisFieldsHtml = `
         <div class="settings-field">
@@ -3474,7 +3611,27 @@ function renderSettingsContent(cardId: string) {
 
   // ---------- Данные ----------
   let dataSlotsHtml = "";
-  if (isGrouped) {
+  if (isBoxGrouped) {
+    dataSlotsHtml = `
+        <div class="settings-slot">
+          <label class="settings-label">Значения (числовая колонка)</label>
+          <div class="settings-dropzone"
+               data-dropzone="0"
+               data-expected-type="numeric">
+            ${renderSlotContent(slot0, 0)}
+          </div>
+        </div>
+        <div class="settings-slot">
+          <label class="settings-label">Группировка (категориальная колонка)</label>
+          <div class="settings-dropzone"
+               data-dropzone="1"
+               data-expected-type="categorical">
+            ${renderSlotContent(slot1, 1)}
+          </div>
+        </div>
+        <p class="settings-hint">Один ящик на категорию, общая шкала значений.</p>
+      `;
+  } else if (isGrouped) {
     dataSlotsHtml = `
         <div class="settings-slot">
           <label class="settings-label">Значения (числовая колонка)</label>
@@ -3500,6 +3657,7 @@ function renderSettingsContent(cardId: string) {
     isBarChart ||
     isBarChartBuckets ||
     card.vizId === "boxplot" ||
+    card.vizId === "boxplot-horizontal" ||
     card.vizId === "summary"
   ) {
     dataSlotsHtml = `
@@ -3564,7 +3722,36 @@ data-tooltip="Крайние значения диапазона входят в
 
   // ---------- Параметры ----------
   let paramsHtml = "";
-  if (isGrouped) {
+  if (isBoxGrouped) {
+    paramsHtml = `
+      <div class="settings-block">
+        <h5 class="settings-block-title">Параметры</h5>
+        <div class="settings-field">
+          <label class="settings-label">Топ-N категорий (0 = все)</label>
+          <input type="number" class="settings-input" min="0" max="24" data-setting="topN" value="${s.topN}" />
+        </div>
+        <div class="settings-field">
+          <div class="settings-label-row">
+            <span class="settings-label">
+              Точность<span
+                class="info-icon"
+                data-tooltip="Количество знаков после запятой в подписях осей. 0 – округление до целых чисел."
+                >?</span
+              >
+            </span>
+            <span class="settings-value" data-precision-value>${s.precision}</span>
+          </div>
+          <input type="range" class="settings-range"
+                 data-setting="precision"
+                 min="0" max="5" step="1"
+                 value="${s.precision}" />
+        </div>
+        <label class="settings-checkbox">
+          <input type="checkbox" data-setting="showGrid" ${s.showGrid ? "checked" : ""} />
+          <span>Показывать сетку</span>
+        </label>
+      </div>`;
+  } else if (isGrouped) {
     paramsHtml = `
       <div class="settings-block">
         <h5 class="settings-block-title">Параметры</h5>
@@ -3735,10 +3922,11 @@ data-tooltip="Крайние значения диапазона входят в
     // Обновляем бейдж сразу — иначе он появится только при следующем
     // пересчёте (onProgress), а при уже посчитанной диаграмме это
     // может быть надолго.
-    if (isGrouped) {
+    if (isGrouped || isBoxGrouped) {
       const activeCount = vizCards.find((c) => c.id === cardId)?.settings
         ? (runningGroupedHistograms.get(cardId)?.getSeriesNames().length ??
           runningGroupedBars.get(cardId)?.getSeriesNames().length ??
+          runningGroupedBoxPlots.get(cardId)?.getSeriesNames().length ??
           0)
         : 0;
       if (legendCheck.checked) {
@@ -3750,7 +3938,7 @@ data-tooltip="Крайние значения диапазона входят в
     }
 
     renderSettingsContent(cardId);
-    redrawActive(card);
+    try { redrawActive(card); } catch (e) { console.error("Redraw error:", e); }
     scheduleSaveVizState();
   });
 
@@ -4173,7 +4361,8 @@ function setupDropzone(dropzone: HTMLElement, card: VizCard, slotIndex: 0 | 1) {
 
     if (
       card.vizId === "histogram-grouped" ||
-      card.vizId === "barchart-grouped"
+      card.vizId === "barchart-grouped" ||
+      card.vizId === "boxplot-grouped"
     ) {
       if (slotIndex === 0 && ct.type !== "numeric") {
         reject();
@@ -4224,26 +4413,53 @@ function syncCardVisual(card: VizCard) {
 
   const slot0 = card.settings.slots[0];
 
-    if (card.vizId === "boxplot" && slot0 && currentData) {
+  // Оба одиночных боксплота (вертикальный и горизонтальный) используют
+  // один и тот же run — отличается только ориентация при отрисовке.
+  const isSingleBoxPlot =
+    card.vizId === "boxplot" || card.vizId === "boxplot-horizontal";
+
+  if (isSingleBoxPlot && slot0 && currentData) {
     stopHistogramForCard(card.id);
     stopBarChartForCard(card.id);
     stopBucketedHistogramForCard(card.id);
     stopBucketedBarChartForCard(card.id);
     stopGroupedHistogramForCard(card.id);
     stopGroupedBarChartForCard(card.id);
+    stopGroupedBoxPlotForCard(card.id);
     runBoxPlotForCard(card);
+    return;
+  }
+
+  if (
+    card.vizId === "boxplot-grouped" &&
+    slot0 &&
+    card.settings.slots[1] &&
+    currentData
+  ) {
+    stopHistogramForCard(card.id);
+    stopBarChartForCard(card.id);
+    stopBucketedHistogramForCard(card.id);
+    stopBucketedBarChartForCard(card.id);
+    stopGroupedHistogramForCard(card.id);
+    stopGroupedBarChartForCard(card.id);
+    stopBoxPlotForCard(card.id);
+    runGroupedBoxPlotForCard(card);
     return;
   }
 
   if (card.vizId === "histogram" && slot0 && currentData) {
     stopBarChartForCard(card.id);
     stopBucketedBarChartForCard(card.id);
+    stopBoxPlotForCard(card.id);
+    stopGroupedBoxPlotForCard(card.id);
     runHistogramForCard(card);
     return;
   }
   if (card.vizId === "histogram-buckets" && currentData) {
     stopBarChartForCard(card.id);
     stopBucketedBarChartForCard(card.id);
+    stopBoxPlotForCard(card.id);
+    stopGroupedBoxPlotForCard(card.id);
     runBucketedHistogramForCard(card);
     return;
   }
@@ -4253,6 +4469,8 @@ function syncCardVisual(card: VizCard) {
     stopBucketedBarChartForCard(card.id);
     stopBucketedHistogramForCard(card.id);
     stopGroupedBarChartForCard(card.id);
+    stopBoxPlotForCard(card.id);
+    stopGroupedBoxPlotForCard(card.id);
     runGroupedHistogramForCard(card);
     return;
   }
@@ -4262,18 +4480,24 @@ function syncCardVisual(card: VizCard) {
     stopBarChartForCard(card.id);
     stopBucketedBarChartForCard(card.id);
     stopBucketedHistogramForCard(card.id);
+    stopBoxPlotForCard(card.id);
+    stopGroupedBoxPlotForCard(card.id);
     runGroupedBarChartForCard(card);
     return;
   }
   if (card.vizId === "barchart" && slot0 && currentData) {
     stopHistogramForCard(card.id);
     stopBucketedBarChartForCard(card.id);
+    stopBoxPlotForCard(card.id);
+    stopGroupedBoxPlotForCard(card.id);
     runBarChartForCard(card);
     return;
   }
 
   if (card.vizId === "barchart-buckets" && currentData) {
     stopHistogramForCard(card.id);
+    stopBoxPlotForCard(card.id);
+    stopGroupedBoxPlotForCard(card.id);
     runBucketedBarChartForCard(card);
     return;
   }
@@ -4281,6 +4505,8 @@ function syncCardVisual(card: VizCard) {
   stopHistogramForCard(card.id);
   stopBarChartForCard(card.id);
   stopBucketedBarChartForCard(card.id);
+  stopBoxPlotForCard(card.id);
+  stopGroupedBoxPlotForCard(card.id);
   refreshCardBody(card);
 }
 
@@ -4291,6 +4517,13 @@ function redrawActive(card: VizCard) {
     boxPlot.redraw();
     return;
   }
+
+  const groupedBox = runningGroupedBoxPlots.get(card.id);
+  if (groupedBox) {
+    groupedBox.redraw();
+    return;
+  }
+
 
   const groupedBar = runningGroupedBars.get(card.id);
   if (groupedBar) {
@@ -6323,6 +6556,7 @@ function openBadRowsModal(cardId: string) {
   const hist = runningHistograms.get(cardId);
   const bar = runningBars.get(cardId);
   const boxPlot = runningBoxPlots.get(cardId);
+  const groupedBox = runningGroupedBoxPlots.get(cardId);
   const stats =
     groupedBar?.extractionStats ??
     grouped?.extractionStats ??
@@ -6330,7 +6564,8 @@ function openBadRowsModal(cardId: string) {
     bucketed?.extractionStats ??
     hist?.extractionStats ??
     bar?.extractionStats ??
-    boxPlot?.extractionStats;
+    boxPlot?.extractionStats ??
+    groupedBox?.extractionStats;
   if (!stats) return;
 
   const card = vizCards.find((c) => c.id === cardId);
@@ -6577,6 +6812,26 @@ function refreshLinkedLegends(sourceCardId: string): void {
 function collectLegendRows(card: VizCard): LegendRow[] {
   const groupedHist = runningGroupedHistograms.get(card.id);
   const groupedBar = runningGroupedBars.get(card.id);
+  const groupedBox = runningGroupedBoxPlots.get(card.id);
+
+  // Групповой боксплот: count = BoxPlotChunkResult.count (число значений в группе).
+  if (groupedBox) {
+    const boxNames = groupedBox.getSeriesNames();
+    if (boxNames.length === 0) return [];
+
+    const PALETTE = [
+      "#4a9eff", "#f59e0b", "#10b981", "#ef4444",
+      "#8b5cf6", "#ec4899", "#14b8a6", "#f97316",
+    ];
+    const counts = boxNames.map((_, i) => groupedBox.states[i]?.count ?? 0);
+    const grand = counts.reduce((s, v) => s + v, 0);
+    return boxNames.map((name, i) => ({
+      color: PALETTE[i % PALETTE.length],
+      name,
+      count: counts[i],
+      share: grand > 0 ? counts[i] / grand : 0,
+    }));
+  }
 
   const state = groupedHist?.lastState ?? groupedBar?.lastState ?? null;
   const seriesNames =
@@ -6705,37 +6960,48 @@ function runBoxPlotForCard(card: VizCard) {
   };
   resizeCanvas();
 
-  // По логике renderSettingsContent для box plot (ветка «не-histogram»):
-  //   «Подпись оси X (частота)»  → yLabelOverride
-  //   «Подпись оси Y (значения)» → slot.legendText
+  // Горизонтальный вариант: оси меняются местами, поэтому подписи тоже.
+  //   вертикальный:   X — категория (yLabelOverride), Y — значения (legendText)
+  //   горизонтальный: X — значения (legendText),    Y — категория (yLabelOverride)
+  const isHorizontal = card.vizId === "boxplot-horizontal";
+
   const getXLabel = () => {
     if (!card.settings.showAxisLabels) return "";
-    return card.settings.yLabelOverride.trim();
+    return isHorizontal
+      ? (slot.legendText ?? "").trim()
+      : card.settings.yLabelOverride.trim();
   };
-    const getYLabel = () => {
+  const getYLabel = () => {
     if (!card.settings.showAxisLabels) return "";
-    return (slot.legendText ?? "").trim();
+    return isHorizontal
+      ? card.settings.yLabelOverride.trim()
+      : (slot.legendText ?? "").trim();
   };
   const getLegendText = () => {
     if (!card.settings.showLegend) return "";
-    return card.settings.legendText.trim() || slot.name;
+    return (card.settings.legendText ?? "").trim() || slot.name;
   };
 
   const redraw = () => {
     const run = runningBoxPlots.get(card.id);
     const state = run?.lastState ?? null;
 
-    renderer.draw(state, {
-      xLabel: getXLabel(),
-      yLabel: getYLabel(),
-      legendText: getLegendText(),
-      showGrid: card.settings.showGrid,
-      showAxisLabels: card.settings.showAxisLabels,
-      precision: card.settings.precision,
-      processed: state?.processed,
-      total: state?.total,
-      placeholder: "Готовим первую порцию…",
-    });
+    try {
+      renderer.draw(state, {
+        xLabel: getXLabel(),
+        yLabel: getYLabel(),
+        legendText: getLegendText(),
+        showGrid: card.settings.showGrid,
+        showAxisLabels: card.settings.showAxisLabels,
+        precision: card.settings.precision,
+        processed: state?.processed,
+        total: state?.total,
+        placeholder: "Готовим первую порцию…",
+        orientation: isHorizontal ? "horizontal" : "vertical",
+      });
+    } catch (e) {
+      console.error(`[BoxPlot ${card.id}] redraw draw():`, e);
+    }
   };
 
   const observer = new ResizeObserver(() => {
@@ -6877,6 +7143,406 @@ function stopBoxPlotForCard(cardId: string) {
   runningBoxPlots.delete(cardId);
   unregisterProgressRun(cardId);
 }
+
+// ============================================================
+// ГРУППОВОЙ BOX PLOT — ИНТЕГРАЦИЯ
+// ============================================================
+//
+// C++ не меняется: каждая категория — отдельный runProgressiveBoxPlot
+// со своим P²-состоянием. Рендерер рисует N ящиков на общей шкале,
+// чтобы распределения можно было сравнивать между собой.
+
+/** Предохранитель: больше 24 групп не рисуем (остальные — «+K ещё»). */
+const MAX_BOX_GROUPS = 24;
+
+interface GroupedBoxPlotRun {
+  handles: BoxPlotHandle[];
+  states: (BoxPlotChunkResult | null)[];
+  canvas: HTMLCanvasElement;
+  renderer: GroupedBoxPlotRenderer;
+  observer: ResizeObserver;
+  getXLabel: () => string;
+  getYLabel: () => string;
+  getSeriesNames: () => string[];
+  tooltip: HTMLDivElement;
+  onMove: (e: MouseEvent) => void;
+  onLeave: () => void;
+  extractionStats: ExtractionStats;
+  issuesBadge: HTMLElement | null;
+  redraw: () => void;
+}
+
+const runningGroupedBoxPlots = new Map<string, GroupedBoxPlotRun>();
+
+function runGroupedBoxPlotForCard(card: VizCard) {
+  stopGroupedBoxPlotForCard(card.id);
+
+  const el = document.getElementById(card.id);
+  const body = el?.querySelector(".viz-card-body") as HTMLElement | null;
+  if (!body) return;
+
+  if (!currentData) return;
+  const slotNum = card.settings.slots[0];
+  const slotCat = card.settings.slots[1];
+
+  if (!slotNum || !slotCat) {
+    body.innerHTML = `
+      <div class="viz-stub">
+        <div class="viz-stub-title">Выберите колонки</div>
+        <div class="viz-stub-sub">Перетащите числовую и категориальную колонки в настройки</div>
+      </div>
+    `;
+    return;
+  }
+
+  const t0 = performance.now();
+  const rows = currentData.rows;
+
+  // ---- Один проход: число + категория + статистика ошибок ----
+  const tmpData = new Float64Array(rows.length);
+  const tmpCat = new Array<string>(rows.length);
+  let n = 0;
+
+  const stats: ExtractionStats = {
+    totalRows: rows.length,
+    valid: 0,
+    nulls: 0,
+    nans: 0,
+    nonNumeric: 0,
+    badRows: [],
+  };
+  const pushBad = (
+    rowNumber: number,
+    reason: BadRow["reason"],
+    rawValue: string,
+  ) => {
+    if (stats.badRows.length < MAX_BAD_ROWS) {
+      stats.badRows.push({ rowNumber, reason, rawValue });
+    }
+  };
+
+  for (let i = 0; i < rows.length; ++i) {
+    const rawNum = rows[i][slotNum.columnIndex];
+    const rawCat = rows[i][slotCat.columnIndex];
+    const rowNumber = i + 1;
+
+    let num: number;
+    if (rawNum == null) {
+      stats.nulls++;
+      pushBad(rowNumber, "null", "");
+      continue;
+    }
+    if (typeof rawNum === "number") {
+      if (!Number.isFinite(rawNum)) {
+        stats.nans++;
+        pushBad(rowNumber, "nan", String(rawNum));
+        continue;
+      }
+      num = rawNum;
+    } else {
+      const s = String(rawNum).trim();
+      if (s === "") {
+        stats.nulls++;
+        pushBad(rowNumber, "null", "");
+        continue;
+      }
+      const parsed = Number(s);
+      if (!Number.isFinite(parsed)) {
+        stats.nonNumeric++;
+        pushBad(rowNumber, "nonNumeric", s);
+        continue;
+      }
+      num = parsed;
+    }
+
+    if (rawCat == null) continue;
+    const catStr = String(rawCat).trim();
+    if (catStr === "") continue;
+
+    tmpData[n] = num;
+    tmpCat[n] = catStr;
+    n++;
+    stats.valid++;
+  }
+
+  if (n === 0) return;
+
+  // ---- Порядок категорий: ordinal по словарю, иначе по частоте ----
+  const catCounts = new Map<string, number>();
+  for (let i = 0; i < n; ++i) {
+    const c = tmpCat[i];
+    catCounts.set(c, (catCounts.get(c) ?? 0) + 1);
+  }
+
+  const catColType = currentData.columnTypes[slotCat.columnIndex]?.type;
+  let sortedCats: string[];
+  if (catColType === "ordinal") {
+    const ordered = orderOrdinalValues(Array.from(catCounts.keys()));
+    sortedCats =
+      ordered ??
+      Array.from(catCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .map(([name]) => name);
+  } else {
+    sortedCats = Array.from(catCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([name]) => name);
+  }
+
+  const topN = card.settings.topN;
+  const byTopN = topN > 0 ? sortedCats.slice(0, topN) : sortedCats;
+  const categoryNames = byTopN.slice(0, MAX_BOX_GROUPS);
+  const hiddenGroupCount = Math.max(0, sortedCats.length - categoryNames.length);
+
+  if (categoryNames.length === 0) return;
+
+  // ---- Разбиение на группы (два прохода: счётчики, затем заполнение) ----
+  const idxByName = new Map(
+    categoryNames.map((name, idx) => [name, idx] as const),
+  );
+  const perGroupCounts = new Array<number>(categoryNames.length).fill(0);
+  const groupIndices = new Int32Array(n);
+
+  for (let i = 0; i < n; ++i) {
+    const gi = idxByName.get(tmpCat[i]);
+    groupIndices[i] = gi === undefined ? -1 : gi;
+    if (gi !== undefined) perGroupCounts[gi]++;
+  }
+
+  // P² требует минимум 5 значений — группы меньше пропускаем.
+  const groupData: Float64Array[] = [];
+  const groupNames: string[] = [];
+  for (let g = 0; g < categoryNames.length; ++g) {
+    if (perGroupCounts[g] < 5) continue;
+    groupData.push(new Float64Array(perGroupCounts[g]));
+    groupNames.push(categoryNames[g]);
+  }
+
+  if (groupData.length === 0) {
+    body.innerHTML = `
+      <div class="viz-stub">
+        <div class="viz-stub-title">Мало данных</div>
+        <div class="viz-stub-sub">Нужно минимум 5 числовых значений в каждой категории</div>
+      </div>
+    `;
+    return;
+  }
+
+  const keptIdx = new Map(groupNames.map((name, idx) => [name, idx] as const));
+  const fillPos = new Array<number>(groupData.length).fill(0);
+
+  for (let i = 0; i < n; ++i) {
+    const gi = groupIndices[i];
+    if (gi < 0) continue;
+    const k = keptIdx.get(categoryNames[gi]);
+    if (k === undefined) continue;
+    groupData[k][fillPos[k]++] = tmpData[i];
+  }
+
+  const totalValid = groupData.reduce((sum, arr) => sum + arr.length, 0);
+
+  body.innerHTML = '<canvas class="viz-canvas-2d"></canvas>';
+  const canvas = body.querySelector("canvas") as HTMLCanvasElement;
+  const renderer = new GroupedBoxPlotRenderer(canvas);
+
+  const resizeCanvas = () => {
+    const r = body.getBoundingClientRect();
+    renderer.resize(r.width - 16, r.height - 16);
+  };
+  resizeCanvas();
+
+  // Подписи как в renderSettingsContent для boxplot-grouped:
+  //   X — категории (yLabelOverride), Y — значения (slotNum.legendText)
+  const getXLabel = () => {
+    if (!card.settings.showAxisLabels) return "";
+    return card.settings.yLabelOverride.trim();
+  };
+  const getYLabel = () => {
+    if (!card.settings.showAxisLabels) return "";
+    return (slotNum.legendText ?? "").trim();
+  };
+  const getSeriesNames = (): string[] => groupNames;
+
+  const states: (BoxPlotChunkResult | null)[] = groupData.map(() => null);
+
+  const redraw = () => {
+    const run = runningGroupedBoxPlots.get(card.id);
+    if (!run) return;
+
+    let processed = 0;
+    for (const st of run.states) {
+      processed += st?.processed ?? 0;
+    }
+
+    renderer.draw(run.states, {
+      categoryNames: groupNames,
+      hiddenGroupCount,
+      xLabel: getXLabel(),
+      yLabel: getYLabel(),
+      showLegend: card.settings.showLegend && groupNames.length <= MAX_INLINE_LEGEND_ITEMS,
+      seriesNames: groupNames,
+      showGrid: card.settings.showGrid,
+      showAxisLabels: card.settings.showAxisLabels,
+      precision: card.settings.precision,
+      processed,
+      total: totalValid,
+      placeholder: "Готовим первую порцию…",
+    });
+  };
+
+  const observer = new ResizeObserver(() => {
+    resizeCanvas();
+    redraw();
+  });
+  observer.observe(body);
+
+  // ---------- Tooltip ----------
+  const tooltip = document.createElement("div");
+  tooltip.className = "viz-tooltip hidden";
+  document.body.appendChild(tooltip);
+
+  const onMove = (e: MouseEvent) => {
+    const rect = canvas.getBoundingClientRect();
+    const hit = renderer.hitTest(
+      e.clientX - rect.left,
+      e.clientY - rect.top,
+    );
+    if (!hit) {
+      tooltip.classList.add("hidden");
+      return;
+    }
+
+    const p = card.settings.precision;
+    const st = runningGroupedBoxPlots.get(card.id)?.states[hit.categoryIndex];
+    const upOut = st?.upperOutlierCount ?? 0;
+    const loOut = st?.lowerOutlierCount ?? 0;
+    const totalOut = upOut + loOut;
+
+    tooltip.innerHTML = `
+      <div class="viz-tooltip-title">${escapeHtml(hit.categoryName)}</div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">max</span>
+        <span class="viz-tooltip-value">${formatNumberPrecise(hit.max, p)}</span>
+      </div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">Q3</span>
+        <span class="viz-tooltip-value">${formatNumberPrecise(hit.q3, p)}</span>
+      </div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">median</span>
+        <span class="viz-tooltip-value">${formatNumberPrecise(hit.median, p)}</span>
+      </div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">Q1</span>
+        <span class="viz-tooltip-value">${formatNumberPrecise(hit.q1, p)}</span>
+      </div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">min</span>
+        <span class="viz-tooltip-value">${formatNumberPrecise(hit.min, p)}</span>
+      </div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">IQR</span>
+        <span class="viz-tooltip-value">${formatNumberPrecise(hit.iqr, p)}</span>
+      </div>
+      ${totalOut > 0 ? `
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">выбросов</span>
+        <span class="viz-tooltip-value">${totalOut.toLocaleString("ru-RU")}</span>
+      </div>
+      ` : ""}
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">n</span>
+        <span class="viz-tooltip-value">${hit.count.toLocaleString("ru-RU")}</span>
+      </div>
+    `;
+    tooltip.style.left = `${e.clientX}px`;
+    tooltip.style.top = `${e.clientY}px`;
+    tooltip.classList.remove("hidden");
+  };
+
+  const onLeave = () => tooltip.classList.add("hidden");
+
+  canvas.addEventListener("mousemove", onMove);
+  canvas.addEventListener("mouseleave", onLeave);
+
+  const errorsCount = stats.nulls + stats.nans + stats.nonNumeric;
+  const issuesHandle = el ? createIssuesBadge(el, card.id) : null;
+  issuesHandle?.update(errorsCount, 0);
+  const issuesBadge: HTMLElement | null = issuesHandle?.el ?? null;
+
+  const run: GroupedBoxPlotRun = {
+    handles: [],
+    states,
+    canvas,
+    renderer,
+    observer,
+    getXLabel,
+    getYLabel,
+    getSeriesNames,
+    tooltip,
+    onMove,
+    onLeave,
+    extractionStats: stats,
+    issuesBadge,
+    redraw,
+  };
+  runningGroupedBoxPlots.set(card.id, run);
+
+  redraw();
+  registerProgressRun(card.id, totalValid);
+
+  // N параллельных rAF-циклов: уменьшаем чанк, чтобы кадр не «толстел».
+  const chunkPerFrame = Math.max(
+    2000,
+    Math.ceil(totalValid / (groupData.length * 100)),
+  );
+
+  let doneGroups = 0;
+
+  groupData.forEach((data, g) => {
+    const handle = runProgressiveBoxPlot({
+      data,
+      chunkPerFrame,
+      onProgress: (state) => {
+        states[g] = state;
+        let processed = 0;
+        for (const st of states) processed += st?.processed ?? 0;
+        updateProgressRun(card.id, processed, totalValid);
+        redraw();
+      },
+      onDone: (state) => {
+        states[g] = state;
+        doneGroups++;
+        if (doneGroups >= groupData.length) finishProgressRun(card.id);
+        redraw();
+      },
+    });
+    run.handles.push(handle);
+  });
+
+  const elapsed = Math.round(performance.now() - t0);
+  console.group(
+    `%c[Grouped box plot ${card.id}] запущено за ${elapsed} мс`,
+    "color:#16a34a;font-weight:bold",
+  );
+  console.log(`Групп: ${groupData.length} из ${sortedCats.length}`);
+  console.log(`Значений: ${totalValid.toLocaleString("ru-RU")}`);
+  console.groupEnd();
+}
+
+function stopGroupedBoxPlotForCard(cardId: string) {
+  const run = runningGroupedBoxPlots.get(cardId);
+  if (!run) return;
+  for (const h of run.handles) h.cancel();
+  run.observer.disconnect();
+  run.canvas.removeEventListener("mousemove", run.onMove);
+  run.canvas.removeEventListener("mouseleave", run.onLeave);
+  run.tooltip.remove();
+  if (run.issuesBadge) run.issuesBadge.remove();
+  runningGroupedBoxPlots.delete(cardId);
+  unregisterProgressRun(cardId);
+}
+
 
 const runningBars = new Map<string, BarChartRun>();
 
@@ -7194,6 +7860,76 @@ document.addEventListener(
   // обработчиков, поэтому никакой drag из тулбара/карточек
   // уже не проскочит
 );
+
+// ============================================================
+// HMR: ЖИВОЕ ОБНОВЛЕНИЕ РЕНДЕРЕРОВ
+// ============================================================
+//
+// Модули рендереров принимают сами себя (import.meta.hot.accept)
+// и присылают сюда свежий модуль через CustomEvent. Мы не перезапускаем
+// обработку данных: подменяем только экземпляр рендерера на живых
+// карточках и перерисовываем их текущим состоянием.
+//
+// Это избавляет от full reload, из-за которого Windows выводит
+// свёрнутое окно браузера на передний план.
+
+interface RendererHotUpdateDetail {
+  type: string;
+  /** Свежий ES-модуль рендерера после HMR. */
+  module: Record<string, unknown>;
+}
+
+function applyRendererHotUpdate(detail: RendererHotUpdateDetail) {
+  const mod = detail.module;
+  if (!mod) return;
+
+  /** Подменяет рендерер в наборе runs и перерисовывает их. */
+  const swap = (
+    runs: Iterable<{
+      canvas: HTMLCanvasElement;
+      redraw: () => void;
+      renderer: unknown;
+    }>,
+    ctor: unknown,
+  ) => {
+    if (typeof ctor !== "function") return;
+    for (const run of runs) {
+      run.renderer = new (ctor as new (c: HTMLCanvasElement) => unknown)(
+        run.canvas,
+      );
+      run.redraw();
+    }
+  };
+
+  switch (detail.type) {
+    case "histogram":
+      swap(runningHistograms.values(), mod.HistogramRenderer);
+      return;
+    case "barchart":
+      swap(runningBars.values(), mod.BarChartRenderer);
+      return;
+    case "grouped-histogram":
+      swap(runningGroupedHistograms.values(), mod.GroupedHistogramRenderer);
+      return;
+    case "grouped-barchart":
+      swap(runningGroupedBars.values(), mod.GroupedBarChartRenderer);
+      return;
+    case "boxplot":
+      swap(runningBoxPlots.values(), mod.BoxPlotRenderer);
+      return;
+    case "grouped-boxplot":
+      swap(runningGroupedBoxPlots.values(), mod.GroupedBoxPlotRenderer);
+      return;
+    default:
+      return;
+  }
+}
+
+window.addEventListener("sift:renderer-updated", (e) => {
+  const detail = (e as CustomEvent<RendererHotUpdateDetail>).detail;
+  if (!detail) return;
+  applyRendererHotUpdate(detail);
+});
 
 // ============================================================
 // СТАРТ

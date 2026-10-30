@@ -21,3 +21,41 @@ Thumbs.db
 !.vscode/launch.json
 
 public/datasets/*
+
+# Универсальные файлы инструкций для ИИ (Koda, Cursor, Copilot, Windsurf, etc.)
+AGENTS.md
+AGENTS.local.md
+AGENTS.private.md
+llms.txt
+llms-full.txt
+
+# Cursor / Windsurf / Cline / Aider
+.cursor/
+.cursorrules
+.cursorignore
+.windsurfrules
+.windsurf/
+.clinerules
+.clinerules.local
+.aider*
+.roomodes.local
+
+# Continue.dev / Koda (основа)
+.continue/
+
+# Claude Code
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+CLAUDE.private.md
+
+# GitHub Copilot
+.github/copilot-instructions.md
+
+# Прочие агенты
+.codeium/
+.githubnext/
+.roo/
+.rooignore
+.bolt/
+.v0/

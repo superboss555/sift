@@ -194,7 +194,7 @@
           <ul id="columns-list" class="columns-list"></ul>
         </aside>
 
-                <!-- Средняя панель: доступные визуализации -->
+        <!-- Средняя панель: доступные визуализации -->
         <aside class="viz-panel viz-options-panel" id="options-panel">
           <div class="panel-header">
             <h4 class="panel-title">Визуализация</h4>
@@ -203,9 +203,16 @@
               data-panel="options-panel"
               title="Свернуть"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-                   stroke="currentColor" stroke-width="2.5"
-                   stroke-linecap="round" stroke-linejoin="round">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
                 <polyline points="15 18 9 12 15 6"></polyline>
               </svg>
             </button>
@@ -213,18 +220,20 @@
 
           <div class="viz-options-scroll">
             <div class="viz-options-section">
-              <h5 class="viz-options-section-title">Гистограммы</h5>
-              <ul id="viz-options-histogram" class="viz-options-list"></ul>
+              <h4 class="viz-options-section-title">Гистограммы</h4>
+              <ul class="viz-options-list" id="viz-options-histogram"></ul>
             </div>
-
             <div class="viz-options-section">
-              <h5 class="viz-options-section-title">Линейчатые</h5>
-              <ul id="viz-options-barchart" class="viz-options-list"></ul>
+              <h4 class="viz-options-section-title">Линейчатые</h4>
+              <ul class="viz-options-list" id="viz-options-barchart"></ul>
             </div>
-
             <div class="viz-options-section">
-              <h5 class="viz-options-section-title">Другое</h5>
-              <ul id="viz-options-other" class="viz-options-list"></ul>
+              <h4 class="viz-options-section-title">Боксплоты</h4>
+              <ul class="viz-options-list" id="viz-options-boxplot"></ul>
+            </div>
+            <div class="viz-options-section">
+              <h4 class="viz-options-section-title">Другое</h4>
+              <ul class="viz-options-list" id="viz-options-other"></ul>
             </div>
           </div>
         </aside>
@@ -273,11 +282,18 @@
           <!-- заполняется программно в renderSheetTabs() -->
         </div>
         <button class="sheet-tabs-add" id="sheet-tabs-add" title="Новый лист">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-               stroke="currentColor" stroke-width="2.5"
-               stroke-linecap="round" stroke-linejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19"/>
-            <line x1="5" y1="12" x2="19" y2="12"/>
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
           </svg>
         </button>
       </div>
@@ -362,7 +378,7 @@
       </div>
     </div>
 
-        <!-- Модалка: проблемные строки -->
+    <!-- Модалка: проблемные строки -->
     <div id="bad-rows-modal" class="modal-overlay">
       <div class="modal bad-rows-modal">
         <h3 class="modal-title">Проблемные строки</h3>
@@ -374,7 +390,9 @@
           </button>
           <button class="bad-rows-tab" data-tab="warnings">
             Предупреждения
-            <span class="bad-rows-tab-count" id="bad-rows-warnings-count">0</span>
+            <span class="bad-rows-tab-count" id="bad-rows-warnings-count"
+              >0</span
+            >
           </button>
         </div>
 

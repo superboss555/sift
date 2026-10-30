@@ -408,3 +408,15 @@ function formatNumber(x: number): string {
   if (a >= 10) return x.toFixed(1);
   return x.toFixed(2);
 }
+
+// HMR: модуль принимает сам себя, чтобы Vite не делал full reload.
+if (import.meta.hot) {
+  import.meta.hot.accept((mod) => {
+    if (!mod) return;
+    window.dispatchEvent(
+      new CustomEvent("sift:renderer-updated", {
+        detail: { type: "barchart", module: mod },
+      }),
+    );
+  });
+}

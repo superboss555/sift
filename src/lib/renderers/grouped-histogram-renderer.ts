@@ -430,3 +430,15 @@ export class GroupedHistogramRenderer {
     return nice * base;
   }
 }
+
+// HMR: модуль принимает сам себя, чтобы Vite не делал full reload.
+if (import.meta.hot) {
+  import.meta.hot.accept((mod) => {
+    if (!mod) return;
+    window.dispatchEvent(
+      new CustomEvent("sift:renderer-updated", {
+        detail: { type: "grouped-histogram", module: mod },
+      }),
+    );
+  });
+}

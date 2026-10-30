@@ -493,6 +493,12 @@ export function runProgressiveBoxPlot(args: {
   data: Float64Array;
   onProgress: (state: BoxPlotChunkResult) => void;
   onDone: (state: BoxPlotChunkResult) => void;
+  /**
+   * Сколько значений обрабатывать за кадр. По умолчанию 20 000.
+   * Уменьшение полезно, когда параллельно работает несколько
+   * box plot'ов (групповой режим) — чтобы не блокировать кадр.
+   */
+  chunkPerFrame?: number;
 }): BoxPlotHandle {
   let cancelled = false;
   let rafId = 0;
@@ -515,7 +521,7 @@ export function runProgressiveBoxPlot(args: {
         core.freeF64(dataPtr);
       };
 
-      const CHUNK = 20000;
+      const CHUNK = args.chunkPerFrame ?? 20000;
 
       const step = () => {
         if (cancelled) return;
