@@ -2834,9 +2834,6 @@ function removeVizCard(cardId: string) {
     .filter((c) => c.vizId === "legend" && c.linkedCardId === cardId)
     .map((c) => c.id);
   for (const id of linkedLegendIds) removeVizCard(id);
-    for (const id of [...runningBoxPlots.keys()]) stopBoxPlotForCard(id);
-  for (const id of [...runningGroupedBoxPlots.keys()])
-    stopGroupedBoxPlotForCard(id);
 
   stopHistogramForCard(cardId);
   stopBarChartForCard(cardId);
@@ -2844,7 +2841,7 @@ function removeVizCard(cardId: string) {
   stopBucketedBarChartForCard(cardId);
   stopGroupedHistogramForCard(cardId);
   stopGroupedBarChartForCard(cardId);
-    stopBoxPlotForCard(cardId);
+  stopBoxPlotForCard(cardId);
   stopGroupedBoxPlotForCard(cardId);
 
   const idx = vizCards.findIndex((c) => c.id === cardId);
@@ -3918,6 +3915,25 @@ data-tooltip="Крайние значения диапазона входят в
   ) as HTMLInputElement;
   legendCheck.addEventListener("change", () => {
     s.showLegend = legendCheck.checked;
+    console.log(
+      `[GroupedBoxPlot DEBUG] legendCheck: card=${card.id} viz=${card.vizId} checked=${legendCheck.checked}`,
+    );
+
+    // Снятая галочка «Легенда» удаляет привязанные карточки-легенды:
+    // они больше не нужны и не должны оставаться «сиротами» на поле.
+    if (!legendCheck.checked) {
+      const linkedLegendIds = vizCards
+        .filter((c) => c.vizId === "legend" && c.linkedCardId === card.id)
+        .map((c) => c.id);
+      console.log(
+        `[GroupedBoxPlot DEBUG] legendCheck: карточек-легенд к удалению=${linkedLegendIds.length}`,
+        linkedLegendIds,
+      );
+      for (const id of linkedLegendIds) {
+        console.log(`[GroupedBoxPlot DEBUG] legendCheck: removeVizCard(${id})`);
+        removeVizCard(id);
+      }
+    }
 
     // Обновляем бейдж сразу — иначе он появится только при следующем
     // пересчёте (onProgress), а при уже посчитанной диаграмме это
@@ -6825,6 +6841,10 @@ function collectLegendRows(card: VizCard): LegendRow[] {
     ];
     const counts = boxNames.map((_, i) => groupedBox.states[i]?.count ?? 0);
     const grand = counts.reduce((s, v) => s + v, 0);
+    console.log(
+      `[GroupedBoxPlot DEBUG] collectLegendRows: card=${card.id} групп=${boxNames.length} Σ=${grand}`,
+      boxNames.map((name, i) => `${name}: ${counts[i]}`),
+    );
     return boxNames.map((name, i) => ({
       color: PALETTE[i % PALETTE.length],
       name,
@@ -7198,6 +7218,11 @@ function runGroupedBoxPlotForCard(card: VizCard) {
   const t0 = performance.now();
   const rows = currentData.rows;
 
+  console.log(
+    `[GroupedBoxPlot DEBUG] start: card=${card.id} viz=${card.vizId} ` +
+    `num="${slotNum.name}" cat="${slotCat.name}" rows=${rows.length}`,
+  );
+
   // ---- Один проход: число + категория + статистика ошибок ----
   const tmpData = new Float64Array(rows.length);
   const tmpCat = new Array<string>(rows.length);
@@ -7296,6 +7321,12 @@ function runGroupedBoxPlotForCard(card: VizCard) {
 
   if (categoryNames.length === 0) return;
 
+  console.log(
+    `[GroupedBoxPlot DEBUG] groups: категорий=${sortedCats.length} topN=${topN} ` +
+      `рисуем=${categoryNames.length} скрыто=${hiddenGroupCount}`,
+    categoryNames,
+  );
+
   // ---- Разбиение на группы (два прохода: счётчики, затем заполнение) ----
   const idxByName = new Map(
     categoryNames.map((name, idx) => [name, idx] as const),
@@ -7327,6 +7358,12 @@ function runGroupedBoxPlotForCard(card: VizCard) {
     `;
     return;
   }
+
+  console.log(
+    `[GroupedBoxPlot DEBUG] groups: после фильтра (<5 значений) групп=${groupNames.length} ` +
+      `totalValid=${groupData.reduce((sum, arr) => sum + arr.length, 0)}`,
+    groupNames.map((name, i) => `${name}: ${groupData[i].length}`),
+  );
 
   const keptIdx = new Map(groupNames.map((name, idx) => [name, idx] as const));
   const fillPos = new Array<number>(groupData.length).fill(0);
@@ -7374,20 +7411,29 @@ function runGroupedBoxPlotForCard(card: VizCard) {
       processed += st?.processed ?? 0;
     }
 
-    renderer.draw(run.states, {
-      categoryNames: groupNames,
-      hiddenGroupCount,
-      xLabel: getXLabel(),
-      yLabel: getYLabel(),
-      showLegend: card.settings.showLegend && groupNames.length <= MAX_INLINE_LEGEND_ITEMS,
-      seriesNames: groupNames,
-      showGrid: card.settings.showGrid,
-      showAxisLabels: card.settings.showAxisLabels,
-      precision: card.settings.precision,
-      processed,
-      total: totalValid,
-      placeholder: "Готовим первую порцию…",
-    });
+    console.log(
+      `[GroupedBoxPlot DEBUG] redraw: card=${card.id} групп=${run.states.length} ` +
+        `processed=${processed}/${totalValid}`,
+    );
+
+    try {
+      renderer.draw(run.states, {
+        categoryNames: groupNames,
+        hiddenGroupCount,
+        xLabel: getXLabel(),
+        yLabel: getYLabel(),
+        showLegend: card.settings.showLegend && groupNames.length <= MAX_INLINE_LEGEND_ITEMS,
+        seriesNames: groupNames,
+        showGrid: card.settings.showGrid,
+        showAxisLabels: card.settings.showAxisLabels,
+        precision: card.settings.precision,
+        processed,
+        total: totalValid,
+        placeholder: "Готовим первую порцию…",
+      });
+    } catch (e) {
+      console.error(`[GroupedBoxPlot ${card.id}] redraw draw():`, e);
+    }
   };
 
   const observer = new ResizeObserver(() => {
@@ -7507,13 +7553,26 @@ function runGroupedBoxPlotForCard(card: VizCard) {
         states[g] = state;
         let processed = 0;
         for (const st of states) processed += st?.processed ?? 0;
+        console.log(
+          `[GroupedBoxPlot DEBUG] onProgress: группа ${g} (${groupNames[g]}) ` +
+            `processed=${state.processed}/${state.total} count=${state.count} done=${state.done} ` +
+            `итого=${processed}/${totalValid}`,
+        );
         updateProgressRun(card.id, processed, totalValid);
+        legendBadges.get(card.id)?.update(groupNames.length);
+        refreshLinkedLegends(card.id);
         redraw();
       },
       onDone: (state) => {
         states[g] = state;
         doneGroups++;
+        console.log(
+          `[GroupedBoxPlot DEBUG] onDone: группа ${g} (${groupNames[g]}) ` +
+            `count=${state.count} готово=${doneGroups}/${groupData.length}`,
+        );
         if (doneGroups >= groupData.length) finishProgressRun(card.id);
+        legendBadges.get(card.id)?.update(groupNames.length);
+        refreshLinkedLegends(card.id);
         redraw();
       },
     });
