@@ -1,4 +1,13 @@
 import "./styles.css";
+import {
+  BusinessChartRenderer,
+  BusinessData,
+  type Aggregation,
+  type BusinessMode,
+  type BusinessSettings,
+  isRankingMode,
+  type Period,
+} from "./lib/renderers/business-chart-renderer.js";
 import { accumulatePie, pieGroupNames, pieSeries, PieChartRenderer, type PieData, type PieLabels, type PieMode } from "./lib/renderers/pie-chart-renderer.js";
 
 import {
@@ -1127,7 +1136,7 @@ interface VizOption {
   id: string;
   label: string;
   types: string[];
-  section: "histogram" | "barchart" | "boxplot" | "pie" | "other";
+  section: "histogram" | "barchart" | "boxplot" | "pie" | "business" | "other";
   enabled: boolean;
   icon: string;
   defaultTitle?: string;
@@ -1139,6 +1148,13 @@ function pieMode(id: string): PieMode | undefined {
   if (id === "piechart") return "count";
   if (id === "piechart-sum") return "sum";
   if (id === "piechart-compare") return "compare";
+}
+
+function businessMode(id: string): BusinessMode | undefined {
+  if (id === "business-trend") return "trend";
+  if (id === "business-ranking") return "ranking";
+  if (id === "business-ranking-columns") return "ranking-columns";
+  if (id === "business-scatter") return "scatter";
 }
 
 const VIZ_OPTIONS: VizOption[] = [
@@ -1335,6 +1351,41 @@ const VIZ_OPTIONS: VizOption[] = [
     enabled: true,
     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="6" cy="12" r="4.5"/><circle cx="18" cy="12" r="4.5"/><path d="M6 7.5V12l4 2m8-6.5V12l-4 2"/></svg>`,
   },
+  // ============ БИЗНЕС-АНАЛИТИКА ============
+  {
+    id: "business-trend",
+    label: "Динамика во времени",
+    types: ["date", "datetime", "numeric"],
+    section: "business",
+    enabled: true,
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v16h16M7 15l4-5 4 2 5-7"/></svg>`,
+  },
+  {
+    id: "business-ranking",
+    label: "Рейтинг категорий",
+    defaultTitle: "Рейтинг категорий · линейчатый",
+    types: [...PIE_CATEGORIES, "numeric"],
+    section: "barchart",
+    enabled: true,
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4v16M7 6h13M7 12h9M7 18h5"/></svg>`,
+  },
+  {
+    id: "business-ranking-columns",
+    label: "Рейтинг категорий",
+    defaultTitle: "Рейтинг категорий · столбчатый",
+    types: [...PIE_CATEGORIES, "numeric"],
+    section: "histogram",
+    enabled: true,
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4v16h16M8 16V5m5 11V9m5 7v-3"/></svg>`,
+  },
+  {
+    id: "business-scatter",
+    label: "Точечная диаграмма",
+    types: ["numeric"],
+    section: "business",
+    enabled: true,
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4v16h16"/><circle cx="8" cy="15" r="1"/><circle cx="12" cy="10" r="1"/><circle cx="17" cy="6" r="1"/><circle cx="18" cy="12" r="1"/></svg>`,
+  },
   // ============ ДРУГОЕ ============
   {
     id: "summary",
@@ -1457,6 +1508,7 @@ interface Bucket {
 }
 
 interface CardSettings {
+  business?: BusinessSettings;
   pie?: { topN: number; labels: PieLabels; groups: [string, string] };
   title: string;
   showLegend: boolean;
@@ -1621,6 +1673,7 @@ let activeCardId: string | null = null;
 let cardCounter = 0;
 
 const legendBadges = new Map<string, LegendBadgeHandle>();
+const businessRuns = new Map<string, { stop(): void; redraw(): void }>();
 const pieRuns = new Map<string, { stop: () => void; redraw: () => void; groups: string[] }>();
 
 let sheets: Sheet[] = [];
@@ -1665,6 +1718,7 @@ function serializeCard(c: VizCard): any {
     settings: {
       title: c.settings.title,
       pie: c.settings.pie,
+      business: c.settings.business,
       showLegend: c.settings.showLegend,
       showAxisLabels: c.settings.showAxisLabels,
       legendText: c.settings.legendText,
@@ -1749,6 +1803,7 @@ function restoreVizState(state: VizState) {
   const extended = state as any;
 
   for (const id of pieRuns.keys()) stopPieForCard(id);
+  for (const id of businessRuns.keys()) stopBusinessForCard(id);
   // Чистим текущее
     for (const id of [...runningBoxPlots.keys()]) stopBoxPlotForCard(id);
   for (const id of [...runningGroupedBoxPlots.keys()])
@@ -1864,6 +1919,7 @@ function restoreVizState(state: VizState) {
       settings: {
         title: sc.settings.title,
         pie: sc.settings.pie,
+        business: sc.settings.business,
         showLegend: sc.settings.showLegend ?? false,
         showAxisLabels: sc.settings.showAxisLabels ?? true,
         legendText: sc.settings.legendText ?? "",
@@ -2557,6 +2613,7 @@ function findBestMatch(
 function getDefaultSize(vizId: string): { width: number; height: number } {
   if (vizId === "piechart-compare") return { width: 620, height: 400 };
   if (pieMode(vizId)) return { width: 420, height: 380 };
+  if (businessMode(vizId)) return { width: 500, height: 350 };
   if (vizId === "summary") return { width: 340, height: 260 };
   if (vizId === "boxplot-grouped") return { width: 620, height: 340 };
   if (vizId === "boxplot-horizontal") return { width: 460, height: 300 };
@@ -2625,7 +2682,7 @@ function addVizCard(vizId: string): VizCard | null {
     height: size.height,
     settings: {
       title: viz.defaultTitle ?? viz.label,
-      showLegend: Boolean(pieMode(vizId)),
+      showLegend: Boolean(pieMode(vizId) || businessMode(vizId)),
       showAxisLabels: true,
       legendText: "",
       slots: [null, null],
@@ -2721,6 +2778,7 @@ function createCardElement(card: VizCard, sheetId?: string) {
     renderLegendCardBody(card);
   }
   if (pieMode(card.vizId)) showPiePrompt(card);
+  if (businessMode(card.vizId)) showBusinessPrompt(card);
 
   // Бейдж легенды — только для grouped-визуализаций
   if (card.vizId === "histogram-grouped" || card.vizId === "barchart-grouped" || card.vizId === "boxplot-grouped") {
@@ -2893,6 +2951,7 @@ function makeResizable(el: HTMLElement, card: VizCard) {
 
 function removeVizCard(cardId: string) {
   stopPieForCard(cardId);
+  stopBusinessForCard(cardId);
   // Если это диаграмма — сначала удаляем связанные с ней карточки-легенды
   const linkedLegendIds = vizCards
     .filter((c) => c.vizId === "legend" && c.linkedCardId === cardId)
@@ -2981,6 +3040,7 @@ function renderVizOptions() {
     barchart: barchartList,
     boxplot: boxplotList,
     pie: document.getElementById("viz-options-pie") as HTMLUListElement,
+    business: document.getElementById("viz-options-business") as HTMLUListElement,
     other: otherList,
   };
 
@@ -3043,7 +3103,7 @@ function selectVisualization(vizId: string) {
   if (!viz) return;
 
   const card = addVizCard(vizId);
-  if (card && pieMode(vizId)) {
+  if (card && (pieMode(vizId) || businessMode(vizId))) {
     setActiveCard(card.id);
     openSettingsPanel();
   }
@@ -3257,6 +3317,7 @@ function deleteSheet(sheetId: string): void {
   // Останавливаем все runs на этом листе
   for (const card of sheet.cards) {
     stopPieForCard(card.id);
+    stopBusinessForCard(card.id);
     stopBoxPlotForCard(card.id);
     stopGroupedBoxPlotForCard(card.id);
     stopHistogramForCard(card.id);
@@ -3296,6 +3357,7 @@ document.getElementById("sheet-tabs-add")?.addEventListener("click", () => {
 
 function resetVizOptions() {
   for (const id of pieRuns.keys()) stopPieForCard(id);
+  for (const id of businessRuns.keys()) stopBusinessForCard(id);
   // Останавливаем все runs
   for (const sheet of sheets) {
     for (const card of sheet.cards) {
@@ -3546,6 +3608,7 @@ function renderSettingsContent(cardId: string) {
   const s = card.settings;
   const [slot0, slot1] = s.slots;
   const pie = pieMode(card.vizId);
+  const business = businessMode(card.vizId);
   const isHistogram = card.vizId === "histogram";
   const isHistogramBuckets = card.vizId === "histogram-buckets";
   const isHistogramGrouped = card.vizId === "histogram-grouped";
@@ -3580,7 +3643,7 @@ function renderSettingsContent(cardId: string) {
                value="${escapeHtml(s.legendText)}"
                placeholder="${escapeHtml(slot1?.name ?? "")}" />
       </div>`;
-  } else if (pie || isBoxGrouped) {
+  } else if (pie || business || isBoxGrouped) {
     // Групповой box plot: легенда — список категорий с цветами.
     // Поле ввода текста не нужно — оставляем только чекбокс showLegend.
     legendFieldsHtml = "";
@@ -3682,7 +3745,9 @@ function renderSettingsContent(cardId: string) {
 
   // ---------- Данные ----------
   let dataSlotsHtml = "";
-  if (isBoxGrouped) {
+  if (business) {
+    dataSlotsHtml = businessSlotsHtml(card, business);
+  } else if (isBoxGrouped) {
     dataSlotsHtml = `
         <div class="settings-slot">
           <label class="settings-label">Значения (числовая колонка)</label>
@@ -3999,6 +4064,7 @@ data-tooltip="Крайние значения диапазона входят в
   }
 
   if (pie) paramsHtml = pieParamsHtml(card, pie);
+  if (business) paramsHtml = businessParamsHtml(card, business);
 
   settingsContent.innerHTML = `
     <div class="settings-block">
@@ -4027,12 +4093,13 @@ data-tooltip="Крайние значения диапазона входят в
         <input type="checkbox" data-setting="showAxisLabels" ${s.showAxisLabels ? "checked" : ""} />
         <span>Показывать подписи на осях</span>
       </label>
-      ${axisFieldsHtml}
+      ${business ? businessAxisFields(card, business) : axisFieldsHtml}
     </div>`}
 
     <div class="settings-block">
       <h5 class="settings-block-title">Данные</h5>
       ${dataSlotsHtml}
+      <p class="settings-hint">Чтобы заменить колонку, нажмите на её поле, затем дважды нажмите на новую колонку слева.</p>
     </div>
   `;
 
@@ -4050,7 +4117,7 @@ data-tooltip="Крайние значения диапазона входят в
   const legendCheck = settingsContent.querySelector(
     '[data-setting="showLegend"]',
   ) as HTMLInputElement;
-  legendCheck.addEventListener("change", () => {
+  legendCheck?.addEventListener("change", () => {
     s.showLegend = legendCheck.checked;
     console.log(
       `[GroupedBoxPlot DEBUG] legendCheck: card=${card.id} viz=${card.vizId} checked=${legendCheck.checked}`,
@@ -4352,6 +4419,7 @@ data-tooltip="Крайние значения диапазона входят в
     });
 
   if (pie) bindPieSettings(card, pie);
+  if (business) bindBusinessSettings(card, business);
 
   // ---------- Информационные значки «?» ----------
   settingsContent
@@ -4517,6 +4585,7 @@ function assignColumnOnDoubleClick(index: number) {
     const expected = zone.dataset.expectedType;
     if (card.settings.slots[slot]) return false;
     if (expected === "categorical") return PIE_CATEGORIES.includes(type);
+    if (expected === "calendar") return type === "date" || type === "datetime";
     return !expected || type === expected;
   });
   if (!target) return;
@@ -4524,7 +4593,9 @@ function assignColumnOnDoubleClick(index: number) {
   const expected = target.dataset.expectedType;
   const compatible = expected === "categorical"
     ? PIE_CATEGORIES.includes(type)
-    : !expected || type === expected;
+    : expected === "calendar"
+      ? type === "date" || type === "datetime"
+      : !expected || type === expected;
   if (!compatible || !assignColumnToSlot(card, Number(target.dataset.dropzone) as 0 | 1, index)) {
     rejectColumnDrop(target);
   }
@@ -4604,6 +4675,9 @@ function assignColumnToSlot(card: VizCard, slotIndex: 0 | 1, idx: number) {
     return assignPieColumn(card, pie, slotIndex, idx);
   }
 
+  const business = businessMode(card.vizId);
+  if (business && !isBusinessColumnCompatible(business, slotIndex, ct.type)) return false;
+
   // ---- Запрет дубликата ----
   const other = (slotIndex === 0 ? 1 : 0) as 0 | 1;
   if (card.settings.slots[other]?.columnIndex === idx) {
@@ -4628,6 +4702,7 @@ function assignColumnToSlot(card: VizCard, slotIndex: 0 | 1, idx: number) {
 
 function syncCardVisual(card: VizCard) {
   stopPieForCard(card.id);
+  stopBusinessForCard(card.id);
   if (card.vizId === "legend") {
     renderLegendCardBody(card);
     return;
@@ -4637,6 +4712,12 @@ function syncCardVisual(card: VizCard) {
   const pie = pieMode(card.vizId);
   if (pie) {
     runPieForCard(card, pie);
+    return;
+  }
+
+  const business = businessMode(card.vizId);
+  if (business) {
+    runBusinessForCard(card, business);
     return;
   }
 
@@ -4950,7 +5031,228 @@ function runPieForCard(card: VizCard, mode: PieMode) {
   frame = requestAnimationFrame(step);
 }
 
+function businessSettings(card: VizCard) {
+  return card.settings.business ??= {
+    aggregation: "sum", period: "month", limit: 10, ascending: false, pointLimit: 10_000,
+  };
+}
+
+function isBusinessColumnCompatible(mode: BusinessMode, slot: 0 | 1, type: string) {
+  if (slot === 1 || mode === "scatter") return type === "numeric";
+  return mode === "trend" ? type === "date" || type === "datetime" : PIE_CATEGORIES.includes(type);
+}
+
+function businessSlotsHtml(card: VizCard, mode: BusinessMode) {
+  const first = mode === "trend" ? ["Дата или время", "calendar"]
+    : isRankingMode(mode) ? ["Категории", "categorical"] : ["Ось X", "numeric"];
+  const second = mode === "scatter" ? ["Ось Y", "numeric"] : ["Показатель", "numeric"];
+  const fields = mode !== "scatter" && businessSettings(card).aggregation === "count"
+    ? [first] : [first, second];
+  return fields.map(([label, type], index) => `
+    <div class="settings-slot">
+      <label class="settings-label">${label}</label>
+      <div class="settings-dropzone" data-dropzone="${index}" data-expected-type="${type}">
+        ${renderSlotContent(card.settings.slots[index], index as 0 | 1)}
+      </div>
+    </div>`).join("");
+}
+
+function businessParamsHtml(card: VizCard, mode: BusinessMode) {
+  const s = businessSettings(card);
+  const select = (label: string, key: string, selected: string, values: [string, string][]) => `
+    <label class="settings-field">${label}
+      <select class="settings-select" data-business="${key}">
+        ${values.map(([value, text]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${text}</option>`).join("")}
+      </select>
+    </label>`;
+
+  return `
+    <div class="settings-block">
+      <h5 class="settings-block-title">Параметры</h5>
+      ${mode !== "scatter" ? select("Расчёт", "aggregation", s.aggregation, [
+        ["sum", "Сумма"], ["average", "Среднее"], ["count", "Количество строк"],
+      ]) : ""}
+      ${mode === "trend" ? select("Период", "period", s.period, [
+        ["day", "День"], ["week", "Неделя с понедельника"], ["month", "Месяц"],
+      ]) : ""}
+      ${isRankingMode(mode) ? `
+        ${select("Порядок", "order", s.ascending ? "ascending" : "descending", [
+          ["descending", "От большего к меньшему"], ["ascending", "От меньшего к большему"],
+        ])}
+        <label class="settings-field">Категорий в рейтинге
+          <input class="settings-input" data-business="limit" type="number" min="1" max="30" value="${s.limit}" />
+        </label>` : ""}
+      ${mode === "scatter" ? select("Максимум точек", "points", String(s.pointLimit), [
+        ["1000", "1 000"], ["5000", "5 000"], ["10000", "10 000"], ["20000", "20 000"],
+      ]) : ""}
+      <label class="settings-field">Знаков после запятой
+        <input class="settings-input" data-business="precision" type="number" min="0" max="5" value="${card.settings.precision}" />
+      </label>
+      ${mode === "ranking" ? "" : `
+        <label class="settings-checkbox">
+          <input type="checkbox" data-setting="showGrid" ${card.settings.showGrid ? "checked" : ""} />
+          <span>Показывать сетку</span>
+        </label>`}
+    </div>`;
+}
+
+function businessMetric(card: VizCard) {
+  const aggregation = businessSettings(card).aggregation;
+  const column = card.settings.slots[1]?.name;
+  if (aggregation === "count") return "Количество строк";
+  const operation = aggregation === "average" ? "Среднее" : "Сумма";
+  return column ? `${operation} · ${column}` : operation;
+}
+
+function businessAxisNames(card: VizCard, mode: BusinessMode): [string, string] {
+  const [first, second] = card.settings.slots;
+  if (mode === "trend") return [first?.name ?? "Период", businessMetric(card)];
+  if (mode === "ranking") return [businessMetric(card), first?.name ?? "Категории"];
+  if (mode === "ranking-columns") return [first?.name ?? "Категории", businessMetric(card)];
+  return [first?.name ?? "Ось X", second?.name ?? "Ось Y"];
+}
+
+function businessAxisFields(card: VizCard, mode: BusinessMode) {
+  const s = businessSettings(card);
+  const [x, y] = businessAxisNames(card, mode);
+  return ([
+    ["axisX", "Подпись оси X", x],
+    ["axisY", "Подпись оси Y", y],
+  ] as const).map(([key, label, fallback]) => `
+    <label class="settings-field">${label}
+      <input class="settings-input" data-business="${key}" type="text" maxlength="100"
+             value="${escapeHtml(s[key] ?? "")}" placeholder="${escapeHtml(fallback)}"
+             ${card.settings.showAxisLabels ? "" : "disabled"} />
+    </label>`).join("");
+}
+
+function bindBusinessSettings(card: VizCard, mode: BusinessMode) {
+  const s = businessSettings(card);
+  settingsContent.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-business]").forEach((input) => {
+    const axis = input.dataset.business;
+    if (axis === "axisX" || axis === "axisY") {
+      input.addEventListener("input", () => {
+        s[axis] = input.value;
+        redrawActive(card);
+        scheduleSaveVizState();
+      });
+      return;
+    }
+    input.addEventListener("change", () => {
+      const key = input.dataset.business;
+      switch (key) {
+        case "aggregation":
+          s.aggregation = input.value as Aggregation;
+          renderSettingsContent(card.id);
+          break;
+        case "period":
+          s.period = input.value as Period;
+          break;
+        case "order":
+          s.ascending = input.value === "ascending";
+          break;
+        case "limit":
+          s.limit = Math.max(1, Math.min(30, Math.round(Number(input.value)) || 10));
+          input.value = String(s.limit);
+          break;
+        case "points":
+          s.pointLimit = Number(input.value);
+          break;
+        case "precision":
+          card.settings.precision = Math.max(0, Math.min(5, Math.round(Number(input.value)) || 0));
+          input.value = String(card.settings.precision);
+          break;
+      }
+      if (key === "aggregation" || key === "period" || (mode === "scatter" && key === "points")) {
+        syncCardVisual(card);
+      } else {
+        redrawActive(card);
+      }
+      scheduleSaveVizState();
+    });
+  });
+}
+
+function showBusinessPrompt(card: VizCard) {
+  const body = document.getElementById(card.id)?.querySelector(".viz-card-body");
+  if (body) body.innerHTML = '<p class="sift-pie-status">Добавьте столбцы в разделе «Данные».</p>';
+}
+
+function stopBusinessForCard(id: string) {
+  const run = businessRuns.get(id);
+  if (!run) return;
+  run.stop();
+  businessRuns.delete(id);
+  unregisterProgressRun(id);
+}
+
+function runBusinessForCard(card: VizCard, mode: BusinessMode) {
+  const rows = currentData?.rows;
+  const [first, second] = card.settings.slots;
+  const settings = businessSettings(card);
+  const body = document.getElementById(card.id)?.querySelector<HTMLElement>(".viz-card-body");
+  if (!body) return;
+  if (!rows || !first || (!second && (mode === "scatter" || settings.aggregation !== "count"))) {
+    showBusinessPrompt(card);
+    return;
+  }
+
+  const content = document.createElement("div");
+  content.className = `business-chart business-chart-${mode}`;
+  body.replaceChildren(content);
+  const renderer = new BusinessChartRenderer(content, mode);
+  const data = new BusinessData();
+  const metric = mode === "scatter" ? "Строки данных" : businessMetric(card);
+
+  let processed = 0;
+  let frame = 0;
+  let lastDraw = -Infinity;
+  const redraw = () => {
+    const [x, y] = businessAxisNames(card, mode);
+    renderer.draw(data, mode, settings, {
+      axes: [settings.axisX?.trim() || x, settings.axisY?.trim() || y],
+      metric,
+      precision: card.settings.precision,
+      showGrid: card.settings.showGrid,
+      showLegend: card.settings.showLegend,
+      showAxisLabels: card.settings.showAxisLabels,
+    });
+  };
+  const observer = new ResizeObserver(redraw);
+  businessRuns.set(card.id, {
+    redraw,
+    stop() {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+    },
+  });
+  registerProgressRun(card.id, rows.length);
+  observer.observe(body);
+  const step = (now: number) => {
+    const deadline = performance.now() + 6;
+    do {
+      const end = Math.min(processed + 256, rows.length);
+      for (; processed < end; processed++) {
+        const row = rows[processed];
+        data.add(mode, settings, row[first.columnIndex], second ? row[second.columnIndex] : undefined);
+      }
+    } while (processed < rows.length && performance.now() < deadline);
+    updateProgressRun(card.id, processed);
+    if (processed === rows.length || now - lastDraw >= 120) {
+      lastDraw = now;
+      redraw();
+    }
+    if (processed < rows.length) frame = requestAnimationFrame(step);
+    else finishProgressRun(card.id);
+  };
+  frame = requestAnimationFrame(step);
+}
+
 function redrawActive(card: VizCard) {
+  if (businessMode(card.vizId)) {
+    businessRuns.get(card.id)?.redraw();
+    return;
+  }
   if (pieMode(card.vizId)) {
     pieRuns.get(card.id)?.redraw();
     return;

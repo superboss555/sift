@@ -5,6 +5,8 @@
 // Отдельная IndexedDB, привязанная к файлу по имени.
 // Хранит карточки, их позиции, размеры, настройки и активную карточку.
 
+import type { BusinessSettings } from "./renderers/business-chart-renderer.js";
+
 const DB_NAME = "sift-viz-state";
 const DB_VERSION = 1;
 const STORE_NAME = "state";
@@ -25,6 +27,7 @@ export interface SerializedBucket {
 }
 
 export interface SerializedCardSettings {
+  business?: BusinessSettings;
   pie?: { topN: number; labels: "percent" | "value" | "none"; groups: [string, string] };
   title: string;
   showLegend: boolean;
