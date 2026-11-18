@@ -19,6 +19,16 @@ export interface GroupedBoxPlotDrawOptions {
   /** Прогресс: сколько значений обработано суммарно. */
   processed?: number;
   total?: number;
+  /** Принудительный выбор шкалы значений. "auto" — эвристика. */
+  scaleMode?: "auto" | "linear" | "log";
+  /** Ромбик среднего в каждой группе. */
+  showMean?: boolean;
+  /** Сырые точки под ящиками. */
+  showRawPoints?: boolean;
+  /** Сырые значения по группам (индекс = индекс категории). */
+  rawDataByGroup?: (Float64Array | null)[];
+  /** Талия (notch) на уровне медианы. */
+  notch?: boolean;
 }
 
 export interface GroupedBoxPlotHitInfo {
@@ -31,6 +41,7 @@ export interface GroupedBoxPlotHitInfo {
   min: number;
   max: number;
   count: number;
+  mean: number;
 }
 
 /**
@@ -43,6 +54,8 @@ export interface GroupedBoxPlotHitInfo {
 export class GroupedBoxPlotRenderer {
   private ctx: CanvasRenderingContext2D;
   private hasData = false;
+  /** Предупреждение о невозможности лог-шкалы — один раз, не каждый кадр. */
+  private logFallbackWarned = false;
   private lastPlot: {
     padL: number;
     padT: number;
@@ -121,8 +134,13 @@ export class GroupedBoxPlotRenderer {
       globalMax = 1;
     }
 
-    // Лог-шкала — только если все значения положительны.
-    const useLog = anyData && globalMin > 0;
+    // Лог-шкала: "auto" — только если все значения положительны;
+    // "linear"/"log" — принудительно, с fallback (edge case 3.1).
+    // Шкала общая для всех групп — сравнение ящиков иначе теряет смысл.
+    const scaleMode = opts.scaleMode ?? "auto";
+    const canLog = anyData && globalMin > 0;
+    const useLog = scaleMode === "linear" ? false : canLog;
+    this.warnLogFallback(scaleMode === "log" && !canLog, scaleMode);
 
     let vMin = globalMin;
     let vMax = globalMax;
@@ -189,6 +207,9 @@ export class GroupedBoxPlotRenderer {
       this.hasData = false;
       return;
     }
+
+    // Границы plot area — для клипа сырых точек и ромбиков среднего.
+    const plotClip = { x: padL, y: padT, w: plotW, h: plotH };
 
     const valueToY = (v: number): number => {
       if (useLog) {
@@ -262,6 +283,17 @@ export class GroupedBoxPlotRenderer {
     // ---- Ящики ----
     const slotW = plotW / n;
     const boxW = Math.max(8, Math.min(slotW * 0.55, 90));
+
+    // Edge case 3.3 (усиленный): 20 групп × 2000 точек = 40 000 arc
+    // на кадр. Держим общий бюджет и делим его между группами,
+    // но не больше MAX_RAW_POINTS на группу.
+    const rawPointCap = Math.max(
+      100,
+      Math.min(
+        MAX_RAW_POINTS,
+        Math.floor(MAX_RAW_POINTS_TOTAL / Math.max(1, n)),
+      ),
+    );
 
     for (let i = 0; i < n; ++i) {
       const cx = padL + slotW * (i + 0.5);
@@ -343,20 +375,65 @@ export class GroupedBoxPlotRenderer {
       ctx.lineTo(cx + capW / 2, yUpperWhisker);
       ctx.stroke();
 
+      // ---- Сырые точки (под ящиком) ----
+      // Edge case 3.5: амплитуда jitter'а ограничена шириной слота,
+      // чтобы точки соседних групп не наезжали друг на друга.
+      if (opts.showRawPoints === true) {
+        const raw = opts.rawDataByGroup?.[i] ?? null;
+        if (raw && raw.length > 0) {
+          this.drawRawPoints(raw, {
+            limit: st.processed,
+            center: cx,
+            jitterRange: Math.min(boxW * 0.5, slotW * 0.4),
+            color: this.withAlpha(color, 0.35),
+            toPos: valueToY,
+            clip: plotClip,
+            loFence: st.q1 - 1.5 * st.iqr,
+            hiFence: st.q3 + 1.5 * st.iqr,
+            maxPoints: rawPointCap,
+          });
+        }
+      }
+
       // Ящик
       const boxTop = Math.min(yQ1, yQ3);
       const boxH = Math.max(1, Math.abs(yQ1 - yQ3));
-      ctx.fillStyle = this.withAlpha(color, 0.16);
-      ctx.fillRect(cx - boxW / 2, boxTop, boxW, boxH);
-
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(
-        cx - boxW / 2 + 0.5,
-        boxTop + 0.5,
-        boxW - 1,
-        boxH - 1,
+      const boxHalfW = boxW / 2;
+      const notch = this.notchInsets(
+        opts.notch === true,
+        st.iqr,
+        st.count,
+        boxH,
+        boxHalfW,
+        Math.abs(yMed - boxTop),
+        Math.abs(boxTop + boxH - yMed),
       );
+      if (notch.before > 0.5 && notch.after > 0.5) {
+        ctx.beginPath();
+        ctx.moveTo(cx - boxHalfW, boxTop);
+        ctx.lineTo(cx - boxHalfW, yMed - notch.before);
+        ctx.lineTo(cx - boxHalfW + notch.before, yMed);
+        ctx.lineTo(cx - boxHalfW, yMed + notch.after);
+        ctx.lineTo(cx - boxHalfW, boxTop + boxH);
+        ctx.lineTo(cx + boxHalfW, boxTop + boxH);
+        ctx.lineTo(cx + boxHalfW, yMed + notch.after);
+        ctx.lineTo(cx + boxHalfW - notch.after, yMed);
+        ctx.lineTo(cx + boxHalfW, yMed - notch.before);
+        ctx.lineTo(cx + boxHalfW, boxTop);
+        ctx.closePath();
+        ctx.fillStyle = this.withAlpha(color, 0.16);
+        ctx.fill();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = this.withAlpha(color, 0.16);
+        ctx.fillRect(cx - boxHalfW, boxTop, boxW, boxH);
+
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(cx - boxHalfW + 0.5, boxTop + 0.5, boxW - 1, boxH - 1);
+      }
 
       // Медиана
       ctx.lineWidth = 2.5;
@@ -364,6 +441,17 @@ export class GroupedBoxPlotRenderer {
       ctx.moveTo(cx - boxW / 2, yMed);
       ctx.lineTo(cx + boxW / 2, yMed);
       ctx.stroke();
+
+      // ---- Среднее (ромбик) ----
+      // На лог-шкале mean <= 0 даёт -Infinity/NaN — drawMeanMarker
+      // отбрасывает такие координаты до отрисовки.
+      if (
+        opts.showMean === true &&
+        st.count > 0 &&
+        Number.isFinite(st.mean)
+      ) {
+        this.drawMeanMarker(cx, valueToY(st.mean), plotClip, color);
+      }
 
       // Выбросы — только когда группа посчитана полностью
       if (st.done) {
@@ -525,6 +613,7 @@ export class GroupedBoxPlotRenderer {
       min: st.min,
       max: st.max,
       count: st.count,
+      mean: st.mean,
     };
   }
 
@@ -558,7 +647,138 @@ export class GroupedBoxPlotRenderer {
     const h = Math.sin(value * 12.9898 + 4.1414) * 43758.5453;
     return (h - Math.floor(h) - 0.5) * range;
   }
+
+  /**
+   * Полуширины талии в пикселях.
+   * Классика: медиана ± 1.58·IQR/√n. Edge case 3.6: ширина ограничена
+   * (Q3−Q1)/2, иначе талия «выворачивает» ящик; плюс ограничение
+   * свободным местом до Q1/Q3 и 45% полуширины ящика.
+   * Edge case 3.7: IQR == 0 или count == 0 — талии нет.
+   */
+  private notchInsets(
+    enabled: boolean,
+    iqr: number,
+    count: number,
+    transversePx: number,
+    boxHalfPx: number,
+    spaceBefore: number,
+    spaceAfter: number,
+  ): { before: number; after: number } {
+    if (!enabled || !(iqr > 0) || count <= 0) {
+      return { before: 0, after: 0 };
+    }
+    const halfVal = Math.min((1.58 * iqr) / Math.sqrt(count), iqr / 2);
+    const halfPx = Math.min((halfVal / iqr) * transversePx, boxHalfPx * 0.45);
+    return {
+      before: Math.min(halfPx, spaceBefore),
+      after: Math.min(halfPx, spaceAfter),
+    };
+  }
+
+  /**
+   * Ромбик среднего группы. Вне plot area не рисуется (edge case 3.2).
+   * Number.isFinite проверяется до отрисовки: на лог-шкале mean = 0
+   * даёт log10(0) = -Infinity, mean < 0 — NaN.
+   */
+  private drawMeanMarker(
+    x: number,
+    y: number,
+    clip: { x: number; y: number; w: number; h: number },
+    color: string,
+  ): void {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    if (x < clip.x || x > clip.x + clip.w) return;
+    if (y < clip.y || y > clip.y + clip.h) return;
+
+    const ctx = this.ctx;
+    const size = 4;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(clip.x, clip.y, clip.w, clip.h);
+    ctx.clip();
+    ctx.beginPath();
+    ctx.moveTo(x, y - size);
+    ctx.lineTo(x + size, y);
+    ctx.lineTo(x, y + size);
+    ctx.lineTo(x - size, y);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /**
+   * Сырые точки под ящиком группы.
+   * Edge case 3.3: не больше maxPoints — каждый k-й элемент,
+   * детерминированно (иначе точки «мигают» на каждом кадре).
+   * Edge case 3.4: выбросы пропускаем, они рисуются отдельным слоем.
+   * Один path и один fill() на группу.
+   */
+  private drawRawPoints(
+    raw: Float64Array,
+    opts: {
+      limit: number;
+      center: number;
+      jitterRange: number;
+      color: string;
+      toPos: (v: number) => number;
+      clip: { x: number; y: number; w: number; h: number };
+      loFence: number;
+      hiFence: number;
+      maxPoints: number;
+    },
+  ): void {
+    const total = Math.min(raw.length, Math.max(0, Math.floor(opts.limit)));
+    if (total <= 0) return;
+
+    const cap = Math.max(1, opts.maxPoints);
+    const stride = Math.max(1, Math.ceil(total / cap));
+    const ctx = this.ctx;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(opts.clip.x, opts.clip.y, opts.clip.w, opts.clip.h);
+    ctx.clip();
+
+    ctx.fillStyle = opts.color;
+    ctx.beginPath();
+    const r = 1.5;
+    for (let i = 0; i < total; i += stride) {
+      const v = raw[i];
+      if (!Number.isFinite(v)) continue;
+      if (v < opts.loFence || v > opts.hiFence) continue;
+      const pos = opts.toPos(v);
+      if (!Number.isFinite(pos)) continue;
+      const x = opts.center + this.outlierJitter(i + 1, opts.jitterRange);
+      ctx.moveTo(x + r, pos);
+      ctx.arc(x, pos, r, 0, Math.PI * 2);
+    }
+    ctx.fill();
+    ctx.restore();
+  }
+
+  /** Однократное предупреждение о fallback лог-шкалы (edge case 3.1). */
+  private warnLogFallback(fallback: boolean, scaleMode: string): void {
+    if (!fallback) {
+      this.logFallbackWarned = false;
+      return;
+    }
+    if (this.logFallbackWarned) return;
+    this.logFallbackWarned = true;
+    console.warn(
+      `[GroupedBoxPlotRenderer] scaleMode="${scaleMode}": логарифмическая ` +
+        `шкала невозможна (есть min <= 0). Включена линейная шкала.`,
+    );
+  }
 }
+
+/** Потолок сырых точек на одну группу. */
+const MAX_RAW_POINTS = 2000;
+/** Общий бюджет сырых точек на кадр (делится между группами). */
+const MAX_RAW_POINTS_TOTAL = 8000;
 
 // HMR: модуль принимает сам себя, чтобы Vite не делал full reload.
 if (import.meta.hot) {

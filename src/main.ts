@@ -1445,6 +1445,16 @@ interface CardSettings {
 
   /** Режим отрисовки для группированной гистограммы. */
   renderMode: "grouped" | "stacked";
+
+  // ---- Box Plot ----
+  /** Ромбик среднего на уровне mean. */
+  showMean: boolean;
+  /** Сырые точки под ящиком. */
+  showRawPoints: boolean;
+  /** Талия (notch) на уровне медианы. */
+  notch: boolean;
+  /** Шкала значений; "auto" — прежняя эвристика рендерера. */
+  scaleMode: "auto" | "linear" | "log";
 }
 
 // ============================================================
@@ -1637,6 +1647,10 @@ function serializeCard(c: VizCard): any {
       buckets: c.settings.buckets.map((b: Bucket) => ({ ...b })),
       bucketsShowName: c.settings.bucketsShowName,
       renderMode: c.settings.renderMode,
+      showMean: c.settings.showMean,
+      showRawPoints: c.settings.showRawPoints,
+      notch: c.settings.notch,
+      scaleMode: c.settings.scaleMode,
       ...(c.linkedCardId !== undefined && { linkedCardId: c.linkedCardId }),
     },
   };
@@ -1838,6 +1852,13 @@ function restoreVizState(state: VizState) {
         renderMode:
           (sc.settings as { renderMode?: "grouped" | "stacked" }).renderMode ??
           "grouped",
+        // Новые поля Box Plot: старые сессии читаются с фолбэком.
+        showMean: sc.settings.showMean ?? false,
+        showRawPoints: sc.settings.showRawPoints ?? false,
+        notch: sc.settings.notch ?? false,
+        scaleMode:
+          (sc.settings as { scaleMode?: "auto" | "linear" | "log" })
+            .scaleMode ?? "auto",
       },
     };
     sheet.cards.push(card);
@@ -2587,6 +2608,10 @@ function addVizCard(vizId: string): VizCard | null {
       buckets: isBuckets ? [makeDefaultBucket(0)] : [],
       bucketsShowName: true,
       renderMode: "grouped",
+      showMean: false,
+      showRawPoints: false,
+      notch: false,
+      scaleMode: "auto",
     },
   };
 
@@ -3488,6 +3513,8 @@ function renderSettingsContent(cardId: string) {
   const isBoxGrouped = card.vizId === "boxplot-grouped";
   /** Горизонтальный box plot: оси X и Y меняются местами. */
   const isBoxHorizontal = card.vizId === "boxplot-horizontal";
+  /** Оба одиночных боксплота — один общий блок «Параметры». */
+  const isBoxSingle = card.vizId === "boxplot" || isBoxHorizontal;
 
   // ---------- Легенда ----------
   let legendFieldsHtml = "";
@@ -3718,6 +3745,32 @@ data-tooltip="Крайние значения диапазона входят в
   }
 
   // ---------- Параметры ----------
+  //
+  // Общие контролы Box Plot: одинаковы для вертикального, горизонтального
+  // и группового варианта — выношены в один фрагмент, чтобы не дублировать
+  // разметку и data-setting-имена.
+  const boxPlotParamsHtml = `
+        <div class="settings-field">
+          <label class="settings-label">Масштаб</label>
+          <select class="settings-select" data-setting="scaleMode">
+            <option value="auto" ${s.scaleMode === "auto" ? "selected" : ""}>Авто</option>
+            <option value="linear" ${s.scaleMode === "linear" ? "selected" : ""}>Линейный</option>
+            <option value="log" ${s.scaleMode === "log" ? "selected" : ""}>Логарифмический</option>
+          </select>
+        </div>
+        <label class="settings-checkbox">
+          <input type="checkbox" data-setting="showMean" ${s.showMean ? "checked" : ""} />
+          <span>Показывать среднее</span>
+        </label>
+        <label class="settings-checkbox">
+          <input type="checkbox" data-setting="showRawPoints" ${s.showRawPoints ? "checked" : ""} />
+          <span>Показывать сырые точки</span>
+        </label>
+        <label class="settings-checkbox">
+          <input type="checkbox" data-setting="notch" ${s.notch ? "checked" : ""} />
+          <span>С эффектом Notch</span>
+        </label>`;
+
   let paramsHtml = "";
   if (isBoxGrouped) {
     paramsHtml = `
@@ -3743,6 +3796,33 @@ data-tooltip="Крайние значения диапазона входят в
                  min="0" max="5" step="1"
                  value="${s.precision}" />
         </div>
+        ${boxPlotParamsHtml}
+        <label class="settings-checkbox">
+          <input type="checkbox" data-setting="showGrid" ${s.showGrid ? "checked" : ""} />
+          <span>Показывать сетку</span>
+        </label>
+      </div>`;
+  } else if (isBoxSingle) {
+    paramsHtml = `
+      <div class="settings-block">
+        <h5 class="settings-block-title">Параметры</h5>
+        <div class="settings-field">
+          <div class="settings-label-row">
+            <span class="settings-label">
+              Точность<span
+                class="info-icon"
+                data-tooltip="Количество знаков после запятой в подписях осей. 0 – округление до целых чисел."
+                >?</span
+              >
+            </span>
+            <span class="settings-value" data-precision-value>${s.precision}</span>
+          </div>
+          <input type="range" class="settings-range"
+                 data-setting="precision"
+                 min="0" max="5" step="1"
+                 value="${s.precision}" />
+        </div>
+        ${boxPlotParamsHtml}
         <label class="settings-checkbox">
           <input type="checkbox" data-setting="showGrid" ${s.showGrid ? "checked" : ""} />
           <span>Показывать сетку</span>
@@ -4137,6 +4217,35 @@ data-tooltip="Крайние значения диапазона входят в
       scheduleSaveVizState();
     });
   }
+
+  // ---------- Box Plot: масштаб, среднее, сырые точки, notch ----------
+  // Все четыре настройки влияют только на отрисовку — перезапуск
+  // прогрессивного расчёта (и WASM-память) не нужен, достаточно redraw().
+  const boxScaleSelect = settingsContent.querySelector(
+    '[data-setting="scaleMode"]',
+  ) as HTMLSelectElement | null;
+  if (boxScaleSelect) {
+    boxScaleSelect.addEventListener("change", () => {
+      s.scaleMode = boxScaleSelect.value as "auto" | "linear" | "log";
+      redrawActive(card);
+      scheduleSaveVizState();
+    });
+  }
+
+  const bindBoxToggle = (key: "showMean" | "showRawPoints" | "notch") => {
+    const input = settingsContent.querySelector(
+      `[data-setting="${key}"]`,
+    ) as HTMLInputElement | null;
+    if (!input) return;
+    input.addEventListener("change", () => {
+      s[key] = input.checked;
+      redrawActive(card);
+      scheduleSaveVizState();
+    });
+  };
+  bindBoxToggle("showMean");
+  bindBoxToggle("showRawPoints");
+  bindBoxToggle("notch");
 
   // ---------- Режим отрисовки (Grouped / Stacked) ----------
   const renderModeSelect = settingsContent.querySelector(
@@ -6733,6 +6842,10 @@ function createLegendCard(sourceCard: VizCard): VizCard {
       buckets: [],
       bucketsShowName: false,
       renderMode: "grouped",
+      showMean: false,
+      showRawPoints: false,
+      notch: false,
+      scaleMode: "auto",
     },
   };
 
@@ -7018,6 +7131,13 @@ function runBoxPlotForCard(card: VizCard) {
         total: state?.total,
         placeholder: "Готовим первую порцию…",
         orientation: isHorizontal ? "horizontal" : "vertical",
+        scaleMode: card.settings.scaleMode,
+        showMean: card.settings.showMean,
+        showRawPoints: card.settings.showRawPoints,
+        // Сырые данные живут в замыкании run-объекта: перезапуск
+        // расчёта при переключении чекбокса не нужен.
+        rawData: data,
+        notch: card.settings.notch,
       });
     } catch (e) {
       console.error(`[BoxPlot ${card.id}] redraw draw():`, e);
@@ -7064,6 +7184,10 @@ function runBoxPlotForCard(card: VizCard) {
       <div class="viz-tooltip-row">
         <span class="viz-tooltip-label">median</span>
         <span class="viz-tooltip-value">${formatNumberPrecise(hit.median, p)}</span>
+      </div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">mean</span>
+        <span class="viz-tooltip-value">${formatNumberPrecise(hit.mean, p)}</span>
       </div>
       <div class="viz-tooltip-row">
         <span class="viz-tooltip-label">Q1</span>
@@ -7430,6 +7554,12 @@ function runGroupedBoxPlotForCard(card: VizCard) {
         processed,
         total: totalValid,
         placeholder: "Готовим первую порцию…",
+        scaleMode: card.settings.scaleMode,
+        showMean: card.settings.showMean,
+        showRawPoints: card.settings.showRawPoints,
+        // Сырые данные по группам: groupData[i] ↔ groupNames[i] ↔ states[i].
+        rawDataByGroup: groupData,
+        notch: card.settings.notch,
       });
     } catch (e) {
       console.error(`[GroupedBoxPlot ${card.id}] redraw draw():`, e);
@@ -7477,6 +7607,10 @@ function runGroupedBoxPlotForCard(card: VizCard) {
       <div class="viz-tooltip-row">
         <span class="viz-tooltip-label">median</span>
         <span class="viz-tooltip-value">${formatNumberPrecise(hit.median, p)}</span>
+      </div>
+      <div class="viz-tooltip-row">
+        <span class="viz-tooltip-label">mean</span>
+        <span class="viz-tooltip-value">${formatNumberPrecise(hit.mean, p)}</span>
       </div>
       <div class="viz-tooltip-row">
         <span class="viz-tooltip-label">Q1</span>

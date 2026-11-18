@@ -42,6 +42,7 @@ declare module "../wasm/sift_core.js" {
       min: number;
       max: number;
       count: number;
+      mean: number;
       done: boolean;
     };
     freeBoxPlot(handle: number): void;
@@ -473,6 +474,8 @@ export interface BoxPlotChunkResult {
   min: number;
   max: number;
   count: number;
+  /** Среднее арифметическое по валидным значениям. 0 при count === 0. */
+  mean: number;
   done: boolean;
   /** Границы усов (Q1 − 1.5·IQR и Q3 + 1.5·IQR). Валидны после done. */
   upperFence: number;

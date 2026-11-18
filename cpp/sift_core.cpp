@@ -735,8 +735,8 @@ struct P2Marker
 // СОСТОЯНИЕ BOX PLOT
 // ============================================================
 //
-// 3 P²-маркера (Q1, медиана, Q3) + min/max + count.
-// ~136 байт на диаграмму.
+// 3 P²-маркера (Q1, медиана, Q3) + min/max + sum/count.
+// ~144 байта на диаграмму.
 
 // Ограничение на число выбросов, которые реально кладём в массив.
 // Если в данных их больше — счётчик сохранит полное число, а в JS
@@ -753,6 +753,8 @@ struct BoxPlotState {
     P2Marker q3;
     double minVal;
     double maxVal;
+    // Сумма всех валидных значений — для среднего (mean).
+    double sum = 0.0;
     int64_t count;
 
     // --- Границы усов (1.5·IQR) и выбросы ---
@@ -784,6 +786,7 @@ struct BoxPlotState {
 
             if (v < minVal) minVal = v;
             if (v > maxVal) maxVal = v;
+            sum += v;
             count += 1;
         }
     }
@@ -852,6 +855,11 @@ emscripten::val processBoxPlotChunk(
     const double q3v = st->q3.estimate();
     const double iqr = q3v - q1v;
 
+    // Edge case 1.1: при count == 0 (все значения нечисловые) mean = 0,
+    // деления на ноль нет.
+    const double mean =
+        (st->count > 0) ? st->sum / static_cast<double>(st->count) : 0.0;
+
     emscripten::val result = emscripten::val::object();
     result.set("processed", static_cast<double>(st->processed));
     result.set("total",     static_cast<double>(st->length));
@@ -861,6 +869,7 @@ emscripten::val processBoxPlotChunk(
     result.set("iqr",       iqr);
     result.set("min",       (st->minVal < +1e300) ? st->minVal : 0.0);
     result.set("max",       (st->maxVal > -1e300) ? st->maxVal : 0.0);
+    result.set("mean",      mean);
     result.set("count",     static_cast<double>(st->count));
     result.set("done",      st->processed >= st->length);
 

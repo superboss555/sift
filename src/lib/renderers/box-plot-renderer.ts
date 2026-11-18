@@ -17,6 +17,16 @@ export interface BoxPlotDrawOptions {
    * "horizontal": ось значений идёт по X, ящик повёрнут.
    */
   orientation?: "vertical" | "horizontal";
+  /** Принудительный выбор шкалы значений. "auto" — эвристика min > 0. */
+  scaleMode?: "auto" | "linear" | "log";
+  /** Рисовать ромбик среднего (state.mean). */
+  showMean?: boolean;
+  /** Рисовать сырые точки под ящиком. */
+  showRawPoints?: boolean;
+  /** Сырые значения для showRawPoints. */
+  rawData?: Float64Array | null;
+  /** Рисовать талию (notch) на уровне медианы. */
+  notch?: boolean;
 }
 
 export interface BoxPlotHitInfo {
@@ -27,11 +37,14 @@ export interface BoxPlotHitInfo {
   min: number;
   max: number;
   count: number;
+  mean: number;
 }
 
 export class BoxPlotRenderer {
   private ctx: CanvasRenderingContext2D;
   private hasData = false;
+  /** Предупреждение о невозможности лог-шкалы — один раз, не каждый кадр. */
+  private logFallbackWarned = false;
   private lastPlot: {
     padL: number;
     padT: number;
@@ -88,7 +101,14 @@ export class BoxPlotRenderer {
     //
     // Защита: если min <= 0 (например, есть отрицательные profit),
     // fallback на линейную шкалу — log(0) не определён.
-    const useLog = !!(state && state.count >= 5 && state.min > 0);
+    const scaleMode = opts.scaleMode ?? "auto";
+    const { useLog, logFallback } = resolveScale(
+      scaleMode,
+      state ? state.count : 0,
+      state ? state.min : 0,
+    );
+    // Edge case 3.1: log запросили, но min <= 0 / count < 5.
+    this.warnLogFallback(logFallback, scaleMode);
 
     let vMin = 0;
     let vMax = 1;
@@ -260,6 +280,9 @@ export class BoxPlotRenderer {
     const yUpperWhisker = valueToY(upperWhiskerVal);
     const yLowerWhisker = valueToY(lowerWhiskerVal);
 
+    // Границы plot area — для клипа сырых точек и ромбика среднего.
+    const plotClip = { x: padL, y: padT, w: plotW, h: plotH };
+
     const accent = "#4a9eff";
     const accentDark = "#2563eb";
 
@@ -285,21 +308,77 @@ export class BoxPlotRenderer {
     ctx.lineTo(cx + capW / 2, yUpperWhisker);
     ctx.stroke();
 
-    // Ящик Q1..Q3
+    // ---- Сырые точки (под ящиком) ----
+    if (opts.showRawPoints === true && opts.rawData) {
+      this.drawRawPoints(opts.rawData, {
+        limit: state.processed,
+        vertical: true,
+        center: cx,
+        jitterRange: boxWidth * 0.5,
+        color: "rgba(37, 99, 235, 0.35)",
+        toPos: valueToY,
+        clip: plotClip,
+        // Edge case 3.4: выбросы не дублируем — у них отдельный слой.
+        loFence: state.q1 - 1.5 * state.iqr,
+        hiFence: state.q3 + 1.5 * state.iqr,
+        maxPoints: MAX_RAW_POINTS,
+      });
+    }
+
+    // Ящик Q1..Q3 (с опциональной талией)
     const gradient = ctx.createLinearGradient(0, yQ3, 0, yQ1);
     gradient.addColorStop(0, "rgba(74, 158, 255, 0.20)");
     gradient.addColorStop(1, "rgba(74, 158, 255, 0.08)");
-    ctx.fillStyle = gradient;
-    ctx.fillRect(cx - boxWidth / 2, yQ3, boxWidth, yQ1 - yQ3);
 
-    ctx.strokeStyle = accentDark;
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(
-      cx - boxWidth / 2 + 0.5,
-      yQ3 + 0.5,
-      boxWidth - 1,
-      yQ1 - yQ3 - 1,
+    const boxHalfW = boxWidth / 2;
+    const yTop = Math.min(yQ1, yQ3);
+    const yBottom = Math.max(yQ1, yQ3);
+    const boxHpx = Math.max(1, yBottom - yTop);
+
+    // Edge case 3.6/3.7: талия ограничена (Q3−Q1)/2, свободным местом
+    // до Q1/Q3 и 45% полуширины ящика; при IQR == 0 не рисуется.
+    const notch = this.notchInsets(
+      opts.notch === true,
+      state.iqr,
+      state.count,
+      boxHpx,
+      boxHalfW,
+      Math.abs(yMed - yTop),
+      Math.abs(yBottom - yMed),
     );
+    const drawNotch = notch.before > 0.5 && notch.after > 0.5;
+
+    if (drawNotch) {
+      ctx.beginPath();
+      ctx.moveTo(cx - boxHalfW, yTop);
+      ctx.lineTo(cx - boxHalfW, yMed - notch.before);
+      ctx.lineTo(cx - boxHalfW + notch.before, yMed);
+      ctx.lineTo(cx - boxHalfW, yMed + notch.after);
+      ctx.lineTo(cx - boxHalfW, yBottom);
+      ctx.lineTo(cx + boxHalfW, yBottom);
+      ctx.lineTo(cx + boxHalfW, yMed + notch.after);
+      ctx.lineTo(cx + boxHalfW - notch.after, yMed);
+      ctx.lineTo(cx + boxHalfW, yMed - notch.before);
+      ctx.lineTo(cx + boxHalfW, yTop);
+      ctx.closePath();
+      ctx.fillStyle = gradient;
+      ctx.fill();
+      ctx.strokeStyle = accentDark;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = gradient;
+      ctx.fillRect(cx - boxHalfW, yQ3, boxWidth, yQ1 - yQ3);
+
+      ctx.strokeStyle = accentDark;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(
+        cx - boxHalfW + 0.5,
+        yQ3 + 0.5,
+        boxWidth - 1,
+        yQ1 - yQ3 - 1,
+      );
+    }
 
     // Медиана
     ctx.strokeStyle = accentDark;
@@ -308,6 +387,17 @@ export class BoxPlotRenderer {
     ctx.moveTo(cx - boxWidth / 2, yMed);
     ctx.lineTo(cx + boxWidth / 2, yMed);
     ctx.stroke();
+
+    // ---- Среднее (ромбик) ----
+    // Edge case 3.2: вне plot area маркер не рисуется (проверка внутри
+    // drawMeanMarker + клип по границам).
+    if (
+      opts.showMean === true &&
+      state.count > 0 &&
+      Number.isFinite(state.mean)
+    ) {
+      this.drawMeanMarker(cx, valueToY(state.mean), plotClip);
+    }
 
     // ---- Выбросы ----
     // Рисуем точками. Стабильный jitter, чтобы не «дрожали»
@@ -491,7 +581,14 @@ export class BoxPlotRenderer {
     const AXIS_COLOR = "#000000";
 
     // ---- X-диапазон (значения) ----
-    const useLog = !!(state && state.count >= 5 && state.min > 0);
+    const scaleMode = opts.scaleMode ?? "auto";
+    const { useLog, logFallback } = resolveScale(
+      scaleMode,
+      state ? state.count : 0,
+      state ? state.min : 0,
+    );
+    // Edge case 3.1: log запросили, но min <= 0 / count < 5.
+    this.warnLogFallback(logFallback, scaleMode);
 
     let vMin = 0;
     let vMax = 1;
@@ -557,6 +654,9 @@ export class BoxPlotRenderer {
       this.hasData = false;
       return;
     }
+
+    // Границы plot area — для клипа сырых точек и ромбика среднего.
+    const plotClip = { x: padL, y: padT, w: plotW, h: plotH };
 
     // Значение → X-пиксель
     const valueToX = (v: number): number => {
@@ -681,17 +781,71 @@ export class BoxPlotRenderer {
     const gradient = ctx.createLinearGradient(boxLeft, 0, boxLeft + boxW, 0);
     gradient.addColorStop(0, "rgba(74, 158, 255, 0.08)");
     gradient.addColorStop(1, "rgba(74, 158, 255, 0.20)");
-    ctx.fillStyle = gradient;
-    ctx.fillRect(boxLeft, cy - boxH / 2, boxW, boxH);
 
-    ctx.strokeStyle = accentDark;
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(
-      boxLeft + 0.5,
-      cy - boxH / 2 + 0.5,
-      boxW - 1,
-      boxH - 1,
+    // ---- Сырые точки (под ящиком) ----
+    if (opts.showRawPoints === true && opts.rawData) {
+      this.drawRawPoints(opts.rawData, {
+        limit: state.processed,
+        vertical: false,
+        center: cy,
+        jitterRange: boxH * 0.5,
+        color: "rgba(37, 99, 235, 0.35)",
+        toPos: valueToX,
+        clip: plotClip,
+        loFence: state.q1 - 1.5 * state.iqr,
+        hiFence: state.q3 + 1.5 * state.iqr,
+        maxPoints: MAX_RAW_POINTS,
+      });
+    }
+
+    const xRight = boxLeft + boxW;
+    const boxHalfH = boxH / 2;
+
+    // Edge case 3.8: талия вертикальная — сужение по Y на уровне медианы по X.
+    const notch = this.notchInsets(
+      opts.notch === true,
+      state.iqr,
+      state.count,
+      boxW,
+      boxHalfH,
+      Math.abs(xMed - boxLeft),
+      Math.abs(xRight - xMed),
     );
+    const drawNotch = notch.before > 0.5 && notch.after > 0.5;
+
+    if (drawNotch) {
+      const yTop = cy - boxHalfH;
+      const yBottom = cy + boxHalfH;
+      ctx.beginPath();
+      ctx.moveTo(boxLeft, yTop);
+      ctx.lineTo(xMed - notch.before, yTop);
+      ctx.lineTo(xMed, yTop + notch.before);
+      ctx.lineTo(xMed + notch.after, yTop);
+      ctx.lineTo(xRight, yTop);
+      ctx.lineTo(xRight, yBottom);
+      ctx.lineTo(xMed + notch.after, yBottom);
+      ctx.lineTo(xMed, yBottom - notch.after);
+      ctx.lineTo(xMed - notch.before, yBottom);
+      ctx.lineTo(boxLeft, yBottom);
+      ctx.closePath();
+      ctx.fillStyle = gradient;
+      ctx.fill();
+      ctx.strokeStyle = accentDark;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = gradient;
+      ctx.fillRect(boxLeft, cy - boxHalfH, boxW, boxH);
+
+      ctx.strokeStyle = accentDark;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(
+        boxLeft + 0.5,
+        cy - boxHalfH + 0.5,
+        boxW - 1,
+        boxH - 1,
+      );
+    }
 
     // Медиана (вертикальная линия)
     ctx.strokeStyle = accentDark;
@@ -700,6 +854,15 @@ export class BoxPlotRenderer {
     ctx.moveTo(xMed, cy - boxH / 2);
     ctx.lineTo(xMed, cy + boxH / 2);
     ctx.stroke();
+
+    // ---- Среднее (ромбик) ----
+    if (
+      opts.showMean === true &&
+      state.count > 0 &&
+      Number.isFinite(state.mean)
+    ) {
+      this.drawMeanMarker(valueToX(state.mean), cy, plotClip);
+    }
 
     // ---- Выбросы ----
     // jitter теперь по вертикали: точки не «дрожат» между кадрами
@@ -866,7 +1029,137 @@ export class BoxPlotRenderer {
       min: r.min,
       max: r.max,
       count: r.count,
+      mean: r.mean,
     };
+  }
+
+  /**
+   * Полуширины талии в пикселях.
+   * Классика: медиана ± 1.58·IQR/√n. Edge case 3.6: ширина ограничена
+   * (Q3−Q1)/2, иначе талия «выворачивает» ящик; плюс ограничение
+   * свободным местом до Q1/Q3 и 45% полуширины ящика.
+   * Edge case 3.7: IQR == 0 или count == 0 — талии нет.
+   */
+  private notchInsets(
+    enabled: boolean,
+    iqr: number,
+    count: number,
+    transversePx: number,
+    boxHalfPx: number,
+    spaceBefore: number,
+    spaceAfter: number,
+  ): { before: number; after: number } {
+    if (!enabled || !(iqr > 0) || count <= 0) {
+      return { before: 0, after: 0 };
+    }
+    const halfVal = Math.min((1.58 * iqr) / Math.sqrt(count), iqr / 2);
+    const halfPx = Math.min((halfVal / iqr) * transversePx, boxHalfPx * 0.45);
+    return {
+      before: Math.min(halfPx, spaceBefore),
+      after: Math.min(halfPx, spaceAfter),
+    };
+  }
+
+  /**
+   * Ромбик среднего. Вне plot area не рисуется (edge case 3.2).
+   * Проверка Number.isFinite стоит до любой отрисовки: на лог-шкале
+   * mean = 0 даёт log10(0) = -Infinity, а mean < 0 — NaN.
+   */
+  private drawMeanMarker(
+    x: number,
+    y: number,
+    clip: { x: number; y: number; w: number; h: number },
+    color = "#111827",
+  ): void {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    if (x < clip.x || x > clip.x + clip.w) return;
+    if (y < clip.y || y > clip.y + clip.h) return;
+
+    const ctx = this.ctx;
+    const size = 5;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(clip.x, clip.y, clip.w, clip.h);
+    ctx.clip();
+    ctx.beginPath();
+    ctx.moveTo(x, y - size);
+    ctx.lineTo(x + size, y);
+    ctx.lineTo(x, y + size);
+    ctx.lineTo(x - size, y);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /**
+   * Сырые точки под ящиком.
+   * Edge case 3.3: не больше maxPoints — берём каждый k-й элемент
+   * (детерминированно: иначе точки «мигают» на каждом кадре).
+   * Edge case 3.4: выбросы пропускаем, они рисуются отдельным слоем.
+   * Все точки — один path, один fill(): 2000 arc+fill вешают кадр.
+   */
+  private drawRawPoints(
+    raw: Float64Array,
+    opts: {
+      limit: number;
+      vertical: boolean;
+      center: number;
+      jitterRange: number;
+      color: string;
+      toPos: (v: number) => number;
+      clip: { x: number; y: number; w: number; h: number };
+      loFence: number;
+      hiFence: number;
+      maxPoints: number;
+    },
+  ): void {
+    const total = Math.min(raw.length, Math.max(0, Math.floor(opts.limit)));
+    if (total <= 0) return;
+
+    const cap = Math.max(1, opts.maxPoints);
+    const stride = Math.max(1, Math.ceil(total / cap));
+    const ctx = this.ctx;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(opts.clip.x, opts.clip.y, opts.clip.w, opts.clip.h);
+    ctx.clip();
+
+    ctx.fillStyle = opts.color;
+    ctx.beginPath();
+    const r = 1.5;
+    for (let i = 0; i < total; i += stride) {
+      const v = raw[i];
+      if (!Number.isFinite(v)) continue;
+      if (v < opts.loFence || v > opts.hiFence) continue;
+      const pos = opts.toPos(v);
+      if (!Number.isFinite(pos)) continue;
+      const off = outlierJitter(i + 1, opts.jitterRange);
+      const x = opts.vertical ? opts.center + off : pos;
+      const y = opts.vertical ? pos : opts.center + off;
+      ctx.moveTo(x + r, y);
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+    }
+    ctx.fill();
+    ctx.restore();
+  }
+
+  /** Однократное предупреждение о fallback лог-шкалы (edge case 3.1). */
+  private warnLogFallback(fallback: boolean, scaleMode: string): void {
+    if (!fallback) {
+      this.logFallbackWarned = false;
+      return;
+    }
+    if (this.logFallbackWarned) return;
+    this.logFallbackWarned = true;
+    console.warn(
+      `[BoxPlotRenderer] scaleMode="${scaleMode}": логарифмическая шкала ` +
+        `невозможна (min <= 0 или count < 5). Включена линейная шкала.`,
+    );
   }
 }
 
@@ -877,6 +1170,27 @@ function formatNumberPrecise(x: number, precision: number): string {
   const p = Math.max(0, Math.min(5, Math.floor(precision)));
   if (p === 0) return Math.round(x).toLocaleString("ru-RU");
   return x.toFixed(p);
+}
+
+/** Потолок сырых точек на один ящик. */
+const MAX_RAW_POINTS = 2000;
+
+/**
+ * Разрешает режим шкалы.
+ * "auto" — прежняя эвристика (count >= 5 && min > 0),
+ * "linear"/"log" — принудительно; logFallback = log запрошен, но невозможен.
+ */
+function resolveScale(
+  scaleMode: "auto" | "linear" | "log",
+  count: number,
+  min: number,
+): { useLog: boolean; logFallback: boolean } {
+  if (scaleMode === "linear") return { useLog: false, logFallback: false };
+  if (scaleMode === "log") {
+    const canLog = count >= 5 && min > 0;
+    return { useLog: canLog, logFallback: !canLog };
+  }
+  return { useLog: count >= 5 && min > 0, logFallback: false };
 }
 
 /**
