@@ -1,4 +1,5 @@
 import "./styles.css";
+import "./monitor.js";
 import {
   BusinessChartRenderer,
   BusinessData,

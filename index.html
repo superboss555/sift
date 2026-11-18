@@ -134,6 +134,15 @@
 
         <div class="toolbar-spacer"></div>
 
+        <button type="button" id="system-monitor-link" class="toolbar-system" aria-controls="page-monitor"
+           title="Мониторинг системы">
+          <span class="toolbar-system-name">Система</span>
+          <span class="toolbar-system-metric">CPU <strong data-system-cpu>—</strong></span>
+          <span class="toolbar-system-metric">Память <strong data-system-ram>—</strong></span>
+          <span class="toolbar-system-metric toolbar-system-extra">GPU <strong data-system-gpu>—</strong></span>
+          <span class="toolbar-system-metric toolbar-system-extra">Диск <strong data-system-disk>—</strong></span>
+        </button>
+
         <div class="toolbar-group">
           <span class="toolbar-label">Обработка:</span>
           <button class="toolbar-btn icon-only" id="steer-pause" title="Пауза">
@@ -306,6 +315,67 @@
         </button>
       </div>
     </div>
+
+    <section id="page-monitor" class="page system-monitor" aria-labelledby="system-monitor-title">
+    <header class="system-header">
+      <button type="button" id="system-monitor-back" class="toolbar-btn">← К диаграммам</button>
+      <h1 id="system-monitor-title" tabindex="-1">Мониторинг системы</h1>
+      <div class="system-connection">
+        <span id="system-mode" role="status">Подключение к локальному серверу…</span>
+        <time id="system-time"></time>
+      </div>
+    </header>
+
+    <main class="system-main">
+      <p id="system-notice" class="system-notice" hidden></p>
+      <div class="system-grid">
+        <section class="system-card" data-resource="cpu" aria-labelledby="monitor-cpu">
+          <div class="system-card-header">
+            <h2 id="monitor-cpu">Процессор</h2>
+            <output id="cpu-value">—</output>
+          </div>
+          <p id="cpu-model" class="system-device">—</p>
+          <p id="cpu-detail" class="system-detail">Логические процессоры: —</p>
+          <canvas data-history="cpu" aria-hidden="true"></canvas>
+          <p class="system-chart-label"><span>60 секунд назад</span><span>Сейчас</span></p>
+        </section>
+
+        <section class="system-card" data-resource="memory" aria-labelledby="monitor-memory">
+          <div class="system-card-header">
+            <h2 id="monitor-memory">Оперативная память</h2>
+            <output id="memory-value">—</output>
+          </div>
+          <p id="memory-device" class="system-device">—</p>
+          <p id="memory-detail" class="system-detail">Доступно: —</p>
+          <canvas data-history="memory" aria-hidden="true"></canvas>
+          <p class="system-chart-label"><span>60 секунд назад</span><span>Сейчас</span></p>
+        </section>
+
+        <section class="system-card" data-resource="gpu" aria-labelledby="monitor-gpu">
+          <div class="system-card-header">
+            <h2 id="monitor-gpu">Графический процессор</h2>
+            <output id="gpu-value">—</output>
+          </div>
+          <p id="gpu-device" class="system-device">—</p>
+          <p id="gpu-detail" class="system-detail">Загрузка самого активного движка GPU</p>
+          <canvas data-history="gpu" aria-hidden="true"></canvas>
+          <p class="system-chart-label"><span>60 секунд назад</span><span>Сейчас</span></p>
+        </section>
+
+        <section class="system-card" data-resource="disk" aria-labelledby="monitor-disk">
+          <div class="system-card-header">
+            <h2 id="monitor-disk">Диски</h2>
+            <output id="disk-value">—</output>
+          </div>
+          <p id="disk-device" class="system-device">—</p>
+          <p id="disk-detail" class="system-detail">Активность самого загруженного диска</p>
+          <canvas data-history="disk" aria-hidden="true"></canvas>
+          <p class="system-chart-label"><span>60 секунд назад</span><span>Сейчас</span></p>
+          <ul id="system-drives" class="system-drives" hidden></ul>
+        </section>
+      </div>
+    </main>
+    </section>
 
     <script type="module" src="/src/main.ts"></script>
 

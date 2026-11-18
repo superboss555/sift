@@ -3084,3 +3084,44 @@ tr:hover {
 .business-ranking-axes[hidden] {
   display: none;
 }
+
+
+.toolbar-system {
+  display: inline-flex;
+  cursor: pointer;
+  font-family: inherit;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+  padding: 6px 10px;
+  border: 1px solid #d8e1ee;
+  border-radius: 8px;
+  color: #334155;
+  background: #f7f9fc;
+  text-decoration: none;
+  font-size: 12px;
+}
+
+.toolbar-system:hover,
+.toolbar-system:focus-visible {
+  color: #1d4ed8;
+  border-color: #7aa7f4;
+}
+
+.toolbar-system-name { font-weight: 650; }
+.toolbar-system-metric { color: #475569; }
+.toolbar-system-metric strong { color: #1e293b; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 1100px) {
+  .toolbar-system .toolbar-system-extra { display: none; }
+}
+
+@media (max-width: 850px) {
+  .viz-toolbar:has(.toolbar-system) { flex-wrap: wrap; }
+}
+
+@media (max-width: 640px) {
+  .viz-toolbar:has(.toolbar-system) { flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
+  .viz-toolbar:has(.toolbar-system) .toolbar-file-name { max-width: min(36vw, 150px); }
+}

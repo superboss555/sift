@@ -1,6 +1,7 @@
 import { defineConfig, type Plugin } from "vite";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { systemMonitor } from "./server/system-monitor.js";
 
 function siftDevExtras(): Plugin {
   return {
@@ -206,7 +207,8 @@ function siftDevExtras(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [siftDevExtras()],
+  plugins: [siftDevExtras(), systemMonitor()],
+
   server: {
     // Явно фиксируем: dev-сервер не открывает браузер сам.
     // Иначе на Windows окно Edge выводится на передний план.
