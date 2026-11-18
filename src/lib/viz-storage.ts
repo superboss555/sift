@@ -25,6 +25,7 @@ export interface SerializedBucket {
 }
 
 export interface SerializedCardSettings {
+  pie?: { topN: number; labels: "percent" | "value" | "none"; groups: [string, string] };
   title: string;
   showLegend: boolean;
   showAxisLabels?: boolean;

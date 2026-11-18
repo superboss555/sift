@@ -1,4 +1,5 @@
 import "./styles.css";
+import { accumulatePie, pieGroupNames, pieSeries, PieChartRenderer, type PieData, type PieLabels, type PieMode } from "./lib/renderers/pie-chart-renderer.js";
 
 import {
   loadFile,
@@ -975,6 +976,10 @@ function renderColumnsList() {
       selectColumn(idx);
     });
 
+    li.addEventListener("dblclick", () => {
+      assignColumnOnDoubleClick(idx);
+    });
+
     // Восстанавливаем выделение после пересортировки
     if (selectedColumnIndex !== null && idx === selectedColumnIndex) {
       li.classList.add("selected");
@@ -1122,10 +1127,18 @@ interface VizOption {
   id: string;
   label: string;
   types: string[];
-  section: "histogram" | "barchart" | "boxplot" | "other";
+  section: "histogram" | "barchart" | "boxplot" | "pie" | "other";
   enabled: boolean;
   icon: string;
   defaultTitle?: string;
+}
+
+const PIE_CATEGORIES = ["string", "mixed", "boolean", "date", "datetime", "ordinal"];
+
+function pieMode(id: string): PieMode | undefined {
+  if (id === "piechart") return "count";
+  if (id === "piechart-sum") return "sum";
+  if (id === "piechart-compare") return "compare";
 }
 
 const VIZ_OPTIONS: VizOption[] = [
@@ -1294,18 +1307,35 @@ const VIZ_OPTIONS: VizOption[] = [
             <line x1="19" y1="12" x2="23" y2="12"/>
         </svg>`,
   },
-  // ============ ДРУГОЕ ============
+  // ============ КРУГОВЫЕ ДИАГРАММЫ ============
   {
     id: "piechart",
-    label: "Круговая",
-    types: ["string", "mixed", "boolean", "date", "datetime", "ordinal"],
-    section: "other",
+    label: "Доля записей",
+    types: PIE_CATEGORIES,
+    section: "pie",
     enabled: true,
     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21.21 15.89A10 10 0 1 1 8 2.83"/>
             <path d="M22 12A10 10 0 0 0 12 2v10z"/>
         </svg>`,
   },
+  {
+    id: "piechart-sum",
+    label: "Доля суммы",
+    types: [...PIE_CATEGORIES, "numeric"],
+    section: "pie",
+    enabled: true,
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="M12 3v5m8 8-4-2M5 18l4-3"/></svg>`,
+  },
+  {
+    id: "piechart-compare",
+    label: "Сравнение двух групп",
+    types: PIE_CATEGORIES,
+    section: "pie",
+    enabled: true,
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="6" cy="12" r="4.5"/><circle cx="18" cy="12" r="4.5"/><path d="M6 7.5V12l4 2m8-6.5V12l-4 2"/></svg>`,
+  },
+  // ============ ДРУГОЕ ============
   {
     id: "summary",
     label: "Сводка",
@@ -1427,6 +1457,7 @@ interface Bucket {
 }
 
 interface CardSettings {
+  pie?: { topN: number; labels: PieLabels; groups: [string, string] };
   title: string;
   showLegend: boolean;
   showAxisLabels: boolean;
@@ -1590,6 +1621,7 @@ let activeCardId: string | null = null;
 let cardCounter = 0;
 
 const legendBadges = new Map<string, LegendBadgeHandle>();
+const pieRuns = new Map<string, { stop: () => void; redraw: () => void; groups: string[] }>();
 
 let sheets: Sheet[] = [];
 let activeSheetId = "";
@@ -1632,6 +1664,7 @@ function serializeCard(c: VizCard): any {
     height: c.height,
     settings: {
       title: c.settings.title,
+      pie: c.settings.pie,
       showLegend: c.settings.showLegend,
       showAxisLabels: c.settings.showAxisLabels,
       legendText: c.settings.legendText,
@@ -1715,6 +1748,7 @@ async function persistVizState() {
 function restoreVizState(state: VizState) {
   const extended = state as any;
 
+  for (const id of pieRuns.keys()) stopPieForCard(id);
   // Чистим текущее
     for (const id of [...runningBoxPlots.keys()]) stopBoxPlotForCard(id);
   for (const id of [...runningGroupedBoxPlots.keys()])
@@ -1829,6 +1863,7 @@ function restoreVizState(state: VizState) {
       linkedCardId,
       settings: {
         title: sc.settings.title,
+        pie: sc.settings.pie,
         showLegend: sc.settings.showLegend ?? false,
         showAxisLabels: sc.settings.showAxisLabels ?? true,
         legendText: sc.settings.legendText ?? "",
@@ -2520,6 +2555,8 @@ function findBestMatch(
 // ---------- Размеры и размещение ----------
 
 function getDefaultSize(vizId: string): { width: number; height: number } {
+  if (vizId === "piechart-compare") return { width: 620, height: 400 };
+  if (pieMode(vizId)) return { width: 420, height: 380 };
   if (vizId === "summary") return { width: 340, height: 260 };
   if (vizId === "boxplot-grouped") return { width: 620, height: 340 };
   if (vizId === "boxplot-horizontal") return { width: 460, height: 300 };
@@ -2588,7 +2625,7 @@ function addVizCard(vizId: string): VizCard | null {
     height: size.height,
     settings: {
       title: viz.defaultTitle ?? viz.label,
-      showLegend: false,
+      showLegend: Boolean(pieMode(vizId)),
       showAxisLabels: true,
       legendText: "",
       slots: [null, null],
@@ -2683,6 +2720,7 @@ function createCardElement(card: VizCard, sheetId?: string) {
   if (isLegend) {
     renderLegendCardBody(card);
   }
+  if (pieMode(card.vizId)) showPiePrompt(card);
 
   // Бейдж легенды — только для grouped-визуализаций
   if (card.vizId === "histogram-grouped" || card.vizId === "barchart-grouped" || card.vizId === "boxplot-grouped") {
@@ -2854,6 +2892,7 @@ function makeResizable(el: HTMLElement, card: VizCard) {
 // ---------- Удаление и активация ----------
 
 function removeVizCard(cardId: string) {
+  stopPieForCard(cardId);
   // Если это диаграмма — сначала удаляем связанные с ней карточки-легенды
   const linkedLegendIds = vizCards
     .filter((c) => c.vizId === "legend" && c.linkedCardId === cardId)
@@ -2941,6 +2980,7 @@ function renderVizOptions() {
     histogram: histogramList,
     barchart: barchartList,
     boxplot: boxplotList,
+    pie: document.getElementById("viz-options-pie") as HTMLUListElement,
     other: otherList,
   };
 
@@ -3002,7 +3042,11 @@ function selectVisualization(vizId: string) {
   const viz = VIZ_OPTIONS.find((v) => v.id === vizId);
   if (!viz) return;
 
-  addVizCard(vizId);
+  const card = addVizCard(vizId);
+  if (card && pieMode(vizId)) {
+    setActiveCard(card.id);
+    openSettingsPanel();
+  }
 }
 
 // ============================================================
@@ -3212,6 +3256,7 @@ function deleteSheet(sheetId: string): void {
 
   // Останавливаем все runs на этом листе
   for (const card of sheet.cards) {
+    stopPieForCard(card.id);
     stopBoxPlotForCard(card.id);
     stopGroupedBoxPlotForCard(card.id);
     stopHistogramForCard(card.id);
@@ -3250,6 +3295,7 @@ document.getElementById("sheet-tabs-add")?.addEventListener("click", () => {
 });
 
 function resetVizOptions() {
+  for (const id of pieRuns.keys()) stopPieForCard(id);
   // Останавливаем все runs
   for (const sheet of sheets) {
     for (const card of sheet.cards) {
@@ -3499,6 +3545,7 @@ function renderSettingsContent(cardId: string) {
 
   const s = card.settings;
   const [slot0, slot1] = s.slots;
+  const pie = pieMode(card.vizId);
   const isHistogram = card.vizId === "histogram";
   const isHistogramBuckets = card.vizId === "histogram-buckets";
   const isHistogramGrouped = card.vizId === "histogram-grouped";
@@ -3533,7 +3580,7 @@ function renderSettingsContent(cardId: string) {
                value="${escapeHtml(s.legendText)}"
                placeholder="${escapeHtml(slot1?.name ?? "")}" />
       </div>`;
-  } else if (isBoxGrouped) {
+  } else if (pie || isBoxGrouped) {
     // Групповой box plot: легенда — список категорий с цветами.
     // Поле ввода текста не нужно — оставляем только чекбокс showLegend.
     legendFieldsHtml = "";
@@ -3695,18 +3742,26 @@ function renderSettingsContent(cardId: string) {
         </div>
         <p class="settings-hint">Ось Y (частота) рассчитывается автоматически.</p>
       `;
-  } else if (card.vizId === "piechart") {
+  } else if (pie) {
+    const secondLabel = pie === "sum" ? "Значения для суммы" : "Разбиение на группы";
     dataSlotsHtml = `
-        <div class="settings-slot">
-          <label class="settings-label">Категории (категориальная колонка)</label>
-          <div class="settings-dropzone"
-               data-dropzone="0"
-               data-expected-type="categorical">
-            ${renderSlotContent(slot0, 0)}
-          </div>
+      <div class="settings-slot">
+        <label class="settings-label">Категории</label>
+        <div class="settings-dropzone" data-dropzone="0" data-expected-type="categorical">
+          ${renderSlotContent(slot0, 0)}
         </div>
-        <p class="settings-hint">Показывается доля каждой уникальной категории.</p>
-      `;
+        ${pieColumnSelect(card, pie, 0)}
+      </div>
+      ${pie === "count" ? "" : `
+        <div class="settings-slot">
+          <label class="settings-label">${secondLabel}</label>
+          <div class="settings-dropzone" data-dropzone="1" data-expected-type="${pie === "sum" ? "numeric" : "categorical"}">
+            ${renderSlotContent(slot1, 1)}
+          </div>
+          ${pieColumnSelect(card, pie, 1)}
+        </div>`}
+      ${pie === "sum" ? '<p class="settings-hint">Суммируются неотрицательные числа. Пустые и некорректные строки пропускаются.</p>' : ""}
+    `;
   } else {
     dataSlotsHtml = `
         <div class="settings-slot">
@@ -3943,6 +3998,8 @@ data-tooltip="Крайние значения диапазона входят в
       </div>`;
   }
 
+  if (pie) paramsHtml = pieParamsHtml(card, pie);
+
   settingsContent.innerHTML = `
     <div class="settings-block">
       <h5 class="settings-block-title">Заголовок</h5>
@@ -3964,14 +4021,14 @@ data-tooltip="Крайние значения диапазона входят в
 
     ${paramsHtml}
 
-    <div class="settings-block">
+    ${pie ? "" : `<div class="settings-block">
       <h5 class="settings-block-title">Подписи на осях</h5>
       <label class="settings-checkbox">
         <input type="checkbox" data-setting="showAxisLabels" ${s.showAxisLabels ? "checked" : ""} />
         <span>Показывать подписи на осях</span>
       </label>
       ${axisFieldsHtml}
-    </div>
+    </div>`}
 
     <div class="settings-block">
       <h5 class="settings-block-title">Данные</h5>
@@ -4279,6 +4336,7 @@ data-tooltip="Крайние значения диапазона входят в
         e.stopPropagation();
         const i = Number(btn.getAttribute("data-remove-slot")) as 0 | 1;
         card.settings.slots[i] = null;
+        if (pie && i === 1) pieSettings(card).groups = ["", ""];
         renderSettingsContent(cardId);
         syncCardVisual(card);
         scheduleSaveVizState();
@@ -4292,6 +4350,8 @@ data-tooltip="Крайние значения диапазона входят в
       const i = Number(zone.getAttribute("data-dropzone")) as 0 | 1;
       setupDropzone(zone, card, i);
     });
+
+  if (pie) bindPieSettings(card, pie);
 
   // ---------- Информационные значки «?» ----------
   settingsContent
@@ -4430,7 +4490,7 @@ data-tooltip="Крайние значения диапазона входят в
 
 function renderSlotContent(slot: DataSlot | null, slotIndex: 0 | 1): string {
   if (!slot)
-    return `<p class="settings-dropzone-empty">Перетащите колонку сюда</p>`;
+    return `<p class="settings-dropzone-empty">Перетащите колонку или дважды нажмите на неё слева</p>`;
   return `
     <div class="dropped-column">
       <div class="dropped-column-header">
@@ -4443,7 +4503,45 @@ function renderSlotContent(slot: DataSlot | null, slotIndex: 0 | 1): string {
   `;
 }
 
+function assignColumnOnDoubleClick(index: number) {
+  if (!activeCardId || !settingsPanel.classList.contains("open")) return;
+
+  const card = vizCards.find(({ id }) => id === activeCardId);
+  const type = currentData?.columnTypes[index]?.type;
+  if (!card || !type || card.settings.slots.some((slot) => slot?.columnIndex === index)) return;
+
+  const zones = [...settingsContent.querySelectorAll<HTMLElement>("[data-dropzone]")];
+  const selected = zones.find((zone) => zone.classList.contains("column-target"));
+  const target = selected ?? zones.find((zone) => {
+    const slot = Number(zone.dataset.dropzone) as 0 | 1;
+    const expected = zone.dataset.expectedType;
+    if (card.settings.slots[slot]) return false;
+    if (expected === "categorical") return PIE_CATEGORIES.includes(type);
+    return !expected || type === expected;
+  });
+  if (!target) return;
+
+  const expected = target.dataset.expectedType;
+  const compatible = expected === "categorical"
+    ? PIE_CATEGORIES.includes(type)
+    : !expected || type === expected;
+  if (!compatible || !assignColumnToSlot(card, Number(target.dataset.dropzone) as 0 | 1, index)) {
+    rejectColumnDrop(target);
+  }
+}
+
+function rejectColumnDrop(zone: HTMLElement) {
+  zone.classList.add("reject");
+  setTimeout(() => zone.classList.remove("reject"), 400);
+}
+
 function setupDropzone(dropzone: HTMLElement, card: VizCard, slotIndex: 0 | 1) {
+  dropzone.title = "Нажмите, чтобы выбрать поле для двойного щелчка по колонке слева";
+  dropzone.addEventListener("click", () => {
+    settingsContent.querySelector(".column-target")?.classList.remove("column-target");
+    dropzone.classList.add("column-target");
+  });
+
   dropzone.addEventListener("dragover", (e) => {
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
@@ -4454,76 +4552,74 @@ function setupDropzone(dropzone: HTMLElement, card: VizCard, slotIndex: 0 | 1) {
     if (e.target === dropzone) dropzone.classList.remove("dragover");
   });
 
-  const reject = () => {
-    dropzone.classList.add("reject");
-    setTimeout(() => dropzone.classList.remove("reject"), 400);
-  };
-
   dropzone.addEventListener("drop", (e) => {
     e.preventDefault();
     dropzone.classList.remove("dragover");
 
     const raw = e.dataTransfer?.getData("application/x-sift-column");
-    if (!raw || !currentData) return;
-    const idx = Number(raw);
-    if (Number.isNaN(idx)) return;
-
-    const ct = currentData.columnTypes[idx];
-    if (!ct) return;
-
-    // ---- Проверка типа колонки под слот ----
-    if (
-      (card.vizId === "histogram" ||
-        card.vizId === "histogram-buckets" ||
-        card.vizId === "barchart" ||
-        card.vizId === "barchart-buckets") &&
-      slotIndex === 0 &&
-      ct.type !== "numeric"
-    ) {
-      reject();
-      return;
-    }
-
-    if (
-      card.vizId === "histogram-grouped" ||
-      card.vizId === "barchart-grouped" ||
-      card.vizId === "boxplot-grouped"
-    ) {
-      if (slotIndex === 0 && ct.type !== "numeric") {
-        reject();
-        return;
-      }
-      if (
-        slotIndex === 1 &&
-        ct.type !== "string" &&
-        ct.type !== "mixed" &&
-        ct.type !== "boolean" &&
-        ct.type !== "date" &&
-        ct.type !== "datetime" &&
-        ct.type !== "ordinal"
-      ) {
-        reject();
-        return;
-      }
-    }
-
-    // ---- Запрет дубликата ----
-    const other = (slotIndex === 0 ? 1 : 0) as 0 | 1;
-    if (card.settings.slots[other]?.columnIndex === idx) {
-      reject();
-      return;
-    }
-
-    card.settings.slots[slotIndex] = {
-      columnIndex: idx,
-      name: ct.name,
-      legendText: ct.name,
-    };
-
-    renderSettingsContent(card.id);
-    syncCardVisual(card);
-    scheduleSaveVizState();
+    if (!raw || !currentData || !currentData.columnTypes[Number(raw)]) return;
+    if (!assignColumnToSlot(card, slotIndex, Number(raw))) rejectColumnDrop(dropzone);
   });
+}
+
+function assignColumnToSlot(card: VizCard, slotIndex: 0 | 1, idx: number) {
+  const ct = currentData?.columnTypes[idx];
+  if (!ct) return false;
+
+  // ---- Проверка типа колонки под слот ----
+  if (
+    (card.vizId === "histogram" ||
+      card.vizId === "histogram-buckets" ||
+      card.vizId === "barchart" ||
+      card.vizId === "barchart-buckets") &&
+    slotIndex === 0 &&
+    ct.type !== "numeric"
+  ) {
+    return false;
+  }
+
+  if (
+    card.vizId === "histogram-grouped" ||
+    card.vizId === "barchart-grouped" ||
+    card.vizId === "boxplot-grouped"
+  ) {
+    if (slotIndex === 0 && ct.type !== "numeric") {
+      return false;
+    }
+    if (
+      slotIndex === 1 &&
+      ct.type !== "string" &&
+      ct.type !== "mixed" &&
+      ct.type !== "boolean" &&
+      ct.type !== "date" &&
+      ct.type !== "datetime" &&
+      ct.type !== "ordinal"
+    ) {
+      return false;
+    }
+  }
+
+  const pie = pieMode(card.vizId);
+  if (pie) {
+    return assignPieColumn(card, pie, slotIndex, idx);
+  }
+
+  // ---- Запрет дубликата ----
+  const other = (slotIndex === 0 ? 1 : 0) as 0 | 1;
+  if (card.settings.slots[other]?.columnIndex === idx) {
+    return false;
+  }
+
+  card.settings.slots[slotIndex] = {
+    columnIndex: idx,
+    name: ct.name,
+    legendText: ct.name,
+  };
+
+  renderSettingsContent(card.id);
+  syncCardVisual(card);
+  scheduleSaveVizState();
+  return true;
 }
 
 // ============================================================
@@ -4531,12 +4627,18 @@ function setupDropzone(dropzone: HTMLElement, card: VizCard, slotIndex: 0 | 1) {
 // ============================================================
 
 function syncCardVisual(card: VizCard) {
+  stopPieForCard(card.id);
   if (card.vizId === "legend") {
     renderLegendCardBody(card);
     return;
   }
 
   const slot0 = card.settings.slots[0];
+  const pie = pieMode(card.vizId);
+  if (pie) {
+    runPieForCard(card, pie);
+    return;
+  }
 
   // Оба одиночных боксплота (вертикальный и горизонтальный) используют
   // один и тот же run — отличается только ориентация при отрисовке.
@@ -4635,7 +4737,224 @@ function syncCardVisual(card: VizCard) {
   refreshCardBody(card);
 }
 
+function isPieSlotCompatible(mode: PieMode, slot: 0 | 1, type: string) {
+  return mode === "sum" && slot === 1 ? type === "numeric" : PIE_CATEGORIES.includes(type);
+}
+
+function pieColumnSelect(card: VizCard, mode: PieMode, slot: 0 | 1) {
+  const current = card.settings.slots[slot]?.columnIndex;
+  const other = card.settings.slots[1 - slot]?.columnIndex;
+  const options = currentData?.columnTypes.map(({ name, type }, index) => {
+    if (index === other || !isPieSlotCompatible(mode, slot, type)) return "";
+    return `<option value="${index}" ${current === index ? "selected" : ""}>${escapeHtml(name)}</option>`;
+  }).join("") ?? "";
+  const label = slot === 0 ? "Выбрать столбец категорий"
+    : mode === "sum" ? "Выбрать столбец суммы" : "Выбрать столбец группировки";
+  return `<select class="settings-select" data-pie-column="${slot}" aria-label="${label}">
+    <option value="" disabled ${current === undefined ? "selected" : ""}>Выбрать столбец…</option>
+    ${options}
+  </select>`;
+}
+
+function assignPieColumn(card: VizCard, mode: PieMode, slot: 0 | 1, index: number) {
+  const column = currentData?.columnTypes[index];
+  const other = card.settings.slots[1 - slot];
+  if (!column || other?.columnIndex === index || !isPieSlotCompatible(mode, slot, column.type)) return false;
+  if (slot === 1 && card.settings.slots[1]?.columnIndex !== index) pieSettings(card).groups = ["", ""];
+  card.settings.slots[slot] = { columnIndex: index, name: column.name, legendText: column.name };
+  syncCardVisual(card);
+  renderSettingsContent(card.id);
+  scheduleSaveVizState();
+  return true;
+}
+
+function pieSettings(card: VizCard) {
+  return card.settings.pie ??= { topN: 6, labels: "percent", groups: ["", ""] };
+}
+
+function pieParamsHtml(card: VizCard, mode: PieMode) {
+  const { topN, labels } = pieSettings(card);
+  const options = [
+    ["percent", "Проценты"], ["value", "Значения"], ["none", "Скрыть"],
+  ];
+  return `
+    <div class="settings-block">
+      <h5 class="settings-block-title">Параметры</h5>
+      <label class="settings-field">Категорий отдельно
+        <input class="settings-input" data-pie-top type="number" min="1" max="12" value="${topN}" />
+      </label>
+      <p class="settings-hint">Оставшиеся категории объединяются в один сектор.</p>
+      <label class="settings-field">Подписи секторов
+        <select class="settings-select" data-pie-label>
+          ${options.map(([key, label]) => `<option value="${key}" ${labels === key ? "selected" : ""}>${label}</option>`).join("")}
+        </select>
+      </label>
+      <label class="settings-field">Знаков после запятой
+        <input class="settings-input" data-pie-precision type="number" min="0" max="5" value="${card.settings.precision}" />
+      </label>
+      ${mode === "compare" ? [0, 1].map((i) => `
+        <label class="settings-field">Группа ${i + 1}
+          <select class="settings-select" data-pie-group="${i}"></select>
+        </label>`).join("") : ""}
+    </div>`;
+}
+
+function selectedPieGroups(card: VizCard, available: string[]) {
+  const [first, second] = pieSettings(card).groups;
+  const firstGroup = available.includes(first)
+    ? first : available.find((group) => group !== second);
+  const secondGroup = available.includes(second) && second !== firstGroup
+    ? second : available.find((group) => group !== firstGroup);
+  return [firstGroup, secondGroup].filter((group): group is string => group !== undefined);
+}
+
+function updatePieGroupOptions(card: VizCard) {
+  const groups = pieRuns.get(card.id)?.groups ?? [];
+  const selected = selectedPieGroups(card, groups);
+  settingsContent.querySelectorAll<HTMLSelectElement>("[data-pie-group]").forEach((select, index) => {
+    select.replaceChildren();
+    select.disabled = groups.length < 2;
+    if (groups.length === 0) select.add(new Option("Выберите столбец группировки", ""));
+    for (const group of groups) {
+      const option = new Option(group, group);
+      option.disabled = group === selected[1 - index];
+      select.add(option);
+    }
+    if (selected[index] !== undefined) select.value = selected[index];
+    else if (groups.length === 1) select.selectedIndex = -1;
+  });
+}
+
+function bindPieSettings(card: VizCard, mode: PieMode) {
+  const settings = pieSettings(card);
+  settingsContent.querySelectorAll<HTMLSelectElement>("[data-pie-column]").forEach((select) => {
+    select.addEventListener("change", () => {
+      const slot = Number(select.dataset.pieColumn) as 0 | 1;
+      assignPieColumn(card, mode, slot, Number(select.value));
+    });
+  });
+  const commit = () => {
+    redrawActive(card);
+    scheduleSaveVizState();
+  };
+  const top = settingsContent.querySelector<HTMLInputElement>("[data-pie-top]")!;
+  top.addEventListener("change", () => {
+    settings.topN = Math.min(12, Math.max(1, Math.round(top.valueAsNumber || 6)));
+    top.value = String(settings.topN);
+    commit();
+  });
+  const precision = settingsContent.querySelector<HTMLInputElement>("[data-pie-precision]")!;
+  precision.addEventListener("change", () => {
+    card.settings.precision = Math.min(5, Math.max(0, Math.round(precision.valueAsNumber || 0)));
+    precision.value = String(card.settings.precision);
+    commit();
+  });
+  const labels = settingsContent.querySelector<HTMLSelectElement>("[data-pie-label]")!;
+  labels.addEventListener("change", () => {
+    settings.labels = labels.value as PieLabels;
+    commit();
+  });
+  updatePieGroupOptions(card);
+  settingsContent.querySelectorAll<HTMLSelectElement>("[data-pie-group]").forEach((select, index) => {
+    select.addEventListener("change", () => {
+      const available = pieRuns.get(card.id)?.groups ?? [];
+      const [first, second] = selectedPieGroups(card, available);
+      settings.groups = [first ?? "", second ?? ""];
+      settings.groups[index as 0 | 1] = select.value;
+      updatePieGroupOptions(card);
+      commit();
+    });
+  });
+}
+
+function showPiePrompt(card: VizCard) {
+  const body = document.getElementById(card.id)?.querySelector(".viz-card-body");
+  if (body) body.innerHTML = '<p class="sift-pie-status">Добавьте столбцы в разделе «Данные».</p>';
+}
+
+function stopPieForCard(id: string) {
+  pieRuns.get(id)?.stop();
+  pieRuns.delete(id);
+}
+
+function runPieForCard(card: VizCard, mode: PieMode) {
+  const rows = currentData?.rows;
+  const [category, second] = card.settings.slots;
+  const body = document.getElementById(card.id)?.querySelector<HTMLElement>(".viz-card-body");
+  if (!body) return;
+  if (!rows || !category || (mode !== "count" && !second)) {
+    showPiePrompt(card);
+    if (card.id === activeCardId) updatePieGroupOptions(card);
+    return;
+  }
+
+  const content = document.createElement("div");
+  content.className = "sift-pie-content";
+  const plot = document.createElement("div");
+  const status = document.createElement("p");
+  status.className = "sift-pie-status";
+  content.append(plot, status);
+  body.replaceChildren(content);
+  const renderer = new PieChartRenderer(plot);
+  const data: PieData = { groups: new Map(), skipped: 0 };
+  const format = new Intl.NumberFormat("ru-RU");
+  let processed = 0;
+  let frame = 0;
+  let series: ReturnType<typeof pieSeries> = [];
+  let settingsKey = "";
+  const redraw = () => {
+    if (processed < rows.length) return;
+    const settings = pieSettings(card);
+    const groups = mode === "compare" ? selectedPieGroups(card, run.groups) : [""];
+    const key = JSON.stringify([settings.topN, groups]);
+    if (key !== settingsKey) {
+      series = pieSeries(data, groups, settings.topN);
+      settingsKey = key;
+    }
+    renderer.draw(series, {
+      hole: mode === "sum", labels: settings.labels,
+      showLegend: card.settings.showLegend, precision: card.settings.precision,
+    });
+    const message = mode === "compare" && groups.length < 2 ? "Для сравнения нужны две группы." : "";
+    const skipped = data.skipped ? `Пропущено строк: ${format.format(data.skipped)}.` : "";
+    status.textContent = [message, skipped].filter(Boolean).join(" ");
+  };
+  const observer = new ResizeObserver(redraw);
+  const run = {
+    groups: [] as string[],
+    redraw,
+    stop() {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    },
+  };
+  const step = () => {
+    const end = Math.min(processed + 10_000, rows.length);
+    accumulatePie(data, rows, processed, end, mode, category.columnIndex, second?.columnIndex ?? -1);
+    processed = end;
+    if (processed < rows.length) {
+      status.textContent = `Обработано ${format.format(processed)} из ${format.format(rows.length)}`;
+      frame = requestAnimationFrame(step);
+      return;
+    }
+    if (mode === "compare") {
+      run.groups = pieGroupNames(data);
+      if (card.id === activeCardId) updatePieGroupOptions(card);
+    }
+    redraw();
+  };
+  pieRuns.set(card.id, run);
+  if (card.id === activeCardId) updatePieGroupOptions(card);
+  status.textContent = "Подсчёт долей…";
+  observer.observe(body);
+  frame = requestAnimationFrame(step);
+}
+
 function redrawActive(card: VizCard) {
+  if (pieMode(card.vizId)) {
+    pieRuns.get(card.id)?.redraw();
+    return;
+  }
 
     const boxPlot = runningBoxPlots.get(card.id);
   if (boxPlot) {
